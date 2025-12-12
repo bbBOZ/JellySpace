@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Smile, Paperclip, MoreVertical, Phone, Video, Search, PanelLeft } from 'lucide-react';
+import { Send, Smile, Paperclip, MoreVertical, Phone, Video, Search, PanelLeft, X } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { MOCK_USERS, BUBBLE_STYLES, FONT_STYLES } from '../data/constants';
-import { decorations as decorationsAPI } from '../lib/supabase';
+import { decorations as decorationsAPI, storage } from '../lib/supabase';
 import { UniversalAvatar } from './UniversalAvatar';
+import { compressImage } from '../lib/imageUtils';
 import EmptyChatState from './EmptyChatState';
 
 // 聊天空状态着色器组件
@@ -221,7 +222,10 @@ export default function ChatView() {
         setViewedProfile,
         fetchFullProfile,
         toggleSidebar,
-        isSidebarCollapsed
+        isSidebarCollapsed,
+        setActiveChatId,
+        showToast,
+        sendImageMessage
     } = useApp();
 
     const [inputText, setInputText] = useState('');
@@ -231,6 +235,7 @@ export default function ChatView() {
     const [imagePreview, setImagePreview] = useState(null);
     const [showImageModal, setShowImageModal] = useState(false);
     const [viewingImage, setViewingImage] = useState(null);
+    const [isExiting, setIsExiting] = useState(false);
     const messagesEndRef = useRef(null);
     const chatContainerRef = useRef(null);
     const fileInputRef = useRef(null);
@@ -256,18 +261,41 @@ export default function ChatView() {
         chatPartner?.display_id?.toLowerCase() === 'jelly';
 
     // 打开聊天对象/群组的详细资料
-    const handleViewProfile = async () => {
-        console.log('handleViewProfile called, activeChat:', activeChat);
+    const handleViewProfile = async (targetUser = null) => {
+        console.log('handleViewProfile called, targetUser:', targetUser, 'activeChat:', activeChat);
+
+        // 如果明确指定了查看某用户 (比如点击消息头像，或者群聊成员)
+        if (targetUser && targetUser.id) {
+            // 如果是自己
+            if (targetUser.id === currentUser?.id) {
+                setViewedProfile(currentUser);
+                openOverlay('profile');
+                return;
+            }
+
+            // 查看他人
+            const fullProfile = await fetchFullProfile(targetUser.id);
+            if (fullProfile) {
+                setViewedProfile(fullProfile);
+                openOverlay('profile');
+            } else {
+                // Fallback if fetch fails or for basic info
+                setViewedProfile(targetUser);
+                openOverlay('profile');
+            }
+            return;
+        }
+
+        // 以下是点击顶部栏的情况 (未指定 targetUser)
         if (activeChat?.type === 'group') {
             console.log('Opening group profile modal for:', activeChat.id);
             openModal('groupProfile');
-            console.log('openModal called');
             return;
         }
 
         if (!chatPartner?.id) return;
 
-        // 从数据库获取完整资料
+        // 私聊：点击顶部栏查看对方
         const fullProfile = await fetchFullProfile(chatPartner.id);
         if (fullProfile) {
             setViewedProfile(fullProfile);
@@ -284,6 +312,11 @@ export default function ChatView() {
         scrollToBottom();
     }, [chatMessages, activeChatId]);
 
+    // Reset exit state when chat changes
+    useEffect(() => {
+        setIsExiting(false);
+    }, [activeChatId]);
+
     // 加载用户的活动聊天背景装扮
     useEffect(() => {
         const loadActiveDecoration = async () => {
@@ -298,10 +331,31 @@ export default function ChatView() {
         loadActiveDecoration();
     }, [currentUser?.id]);
 
-    const handleSend = (e) => {
+    const handleSend = async (e) => {
         e.preventDefault();
+
+        // Handle Image
+        if (imageFile) {
+            // 使用新的乐观更新发送逻辑
+            // 1. 获取预览 URL (已经有了 imagePreview，如果是 blob url 就完美)
+            // 2. 调用 sendImageMessage(chatId, file, previewUrl)
+            // 3. 立即清空 UI
+            if (imagePreview) {
+                sendImageMessage(activeChatId, imageFile, imagePreview);
+            } else {
+                // Fallback if no preview
+                const preview = URL.createObjectURL(imageFile);
+                sendImageMessage(activeChatId, imageFile, preview);
+            }
+
+            setImageFile(null);
+            setImagePreview(null);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+
+        // Handle Text
         if (inputText.trim()) {
-            sendMessage(activeChatId, inputText);
+            await sendMessage(activeChatId, inputText);
             setInputText('');
         }
     };
@@ -398,8 +452,22 @@ export default function ChatView() {
         );
     }
 
+
+
+    const handleExit = () => {
+        setIsExiting(true);
+        if (!isSidebarCollapsed) {
+            toggleSidebar();
+            // Match sidebar transition
+            setTimeout(() => setActiveChatId(null), 300);
+        } else {
+            // Just fade out
+            setTimeout(() => setActiveChatId(null), 300);
+        }
+    };
+
     return (
-        <div className="flex flex-col h-full relative" style={getFontStyle()}>
+        <div className={`flex flex-col h-full relative transition-opacity duration-300 ${isExiting ? 'opacity-0' : 'opacity-100'}`} style={getFontStyle()}>
             {/* 聊天顶栏 */}
             <div className="h-16 px-6 flex items-center justify-between border-b theme-border bg-white/5 backdrop-blur-md z-10">
                 <div className="flex items-center gap-3">
@@ -433,18 +501,24 @@ export default function ChatView() {
                     </div>
                 </div>
 
-                <div className="flex items-center gap-4 theme-text-secondary">
-                    <button className="p-2 hover:bg-white/10 rounded-full transition-colors">
-                        <Phone className="w-5 h-5" />
+                <div className="flex items-center gap-4">
+                    <button className="p-2 hover:bg-white/10 rounded-xl transition-all relative group">
+                        <Phone className="w-5 h-5 theme-text-secondary group-hover:theme-text-primary" />
                     </button>
-                    <button className="p-2 hover:bg-white/10 rounded-full transition-colors">
-                        <Video className="w-5 h-5" />
+                    <button className="p-2 hover:bg-white/10 rounded-xl transition-all relative group">
+                        <Video className="w-5 h-5 theme-text-secondary group-hover:theme-text-primary" />
                     </button>
-                    <button className="p-2 hover:bg-white/10 rounded-full transition-colors">
-                        <Search className="w-5 h-5" />
+                    <button
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            handleExit();
+                        }}
+                        className="p-2 hover:bg-red-500/10 rounded-xl transition-all relative group"
+                    >
+                        <X className="w-5 h-5 theme-text-secondary group-hover:text-red-500" />
                     </button>
-                    <button className="p-2 hover:bg-white/10 rounded-full transition-colors">
-                        <MoreVertical className="w-5 h-5" />
+                    <button className="p-2 hover:bg-white/10 rounded-xl transition-all relative group">
+                        <MoreVertical className="w-5 h-5 theme-text-secondary group-hover:theme-text-primary" />
                     </button>
                 </div>
             </div>
@@ -477,7 +551,10 @@ export default function ChatView() {
                                     isJellyChat ? (
                                         <div
                                             className="w-8 h-8 mb-1 cursor-pointer hover:scale-110 transition-transform flex-shrink-0"
-                                            onClick={handleViewProfile}
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleViewProfile(msg.sender || { id: msg.senderId });
+                                            }}
                                         >
                                             <JellyShaderAvatar size="w-8 h-8" />
                                         </div>
@@ -485,7 +562,10 @@ export default function ChatView() {
                                         <img
                                             src={msg.sender?.avatar_url || chatPartner?.avatar_url || `https://api.dicebear.com/7.x/notionists/svg?seed=${msg.senderId || 'Unknown'}`}
                                             className="w-8 h-8 rounded-full mb-1 cursor-pointer hover:scale-110 transition-transform flex-shrink-0"
-                                            onClick={handleViewProfile}
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleViewProfile(msg.sender || { id: msg.senderId });
+                                            }}
                                         />
                                     )
                                 )}
@@ -494,19 +574,36 @@ export default function ChatView() {
                                     {showNickname && (
                                         <span className="text-xs theme-text-secondary mb-1 ml-1">{msg.sender?.username || '用户'}</span>
                                     )}
-                                    <div className={`px-4 py-2.5 shadow-sm text-sm break-words whitespace-pre-wrap leading-relaxed ${getBubbleClass(isMe, isJellyChat)}`}>
-                                        {/* 图片消息 */}
-                                        {msg.message_type === 'image' && msg.media_url ? (
+                                    {/* 图片消息 - 移除气泡样式，直接显示图片 */}
+                                    {(msg.message_type === 'image' && (msg.media_url || msg.text)) ? (
+                                        <div className="relative group">
                                             <img
-                                                src={msg.media_url}
+                                                src={msg.media_url || msg.text}
                                                 alt="图片"
-                                                className="max-w-xs rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
-                                                onClick={() => handleViewImage(msg.media_url)}
+                                                className={`max-w-[280px] sm:max-w-sm md:max-w-md rounded-2xl cursor-pointer shadow-sm transition-all
+                                                    ${msg.status === 'sending' ? 'opacity-70 blur-[1px]' : 'hover:opacity-95'}
+                                                    ${msg.status === 'error' ? 'border-2 border-red-500 opacity-80' : ''}
+                                                `}
+                                                onClick={() => handleViewImage(msg.media_url || msg.text)}
                                             />
-                                        ) : (
-                                            msg.text
-                                        )}
-                                    </div>
+                                            {/* Sending Indicator */}
+                                            {msg.status === 'sending' && (
+                                                <div className="absolute inset-0 flex items-center justify-center bg-black/10 rounded-2xl">
+                                                    <div className="w-8 h-8 border-4 border-white/30 border-t-white/90 rounded-full animate-spin"></div>
+                                                </div>
+                                            )}
+                                            {/* Error Indicator */}
+                                            {msg.status === 'error' && (
+                                                <div className="absolute top-2 right-2 bg-red-500 text-white rounded-full p-1 shadow-lg cursor-help" title="发送失败">
+                                                    <X size={16} strokeWidth={3} />
+                                                </div>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <div className={`px-4 py-2.5 shadow-sm text-sm break-words whitespace-pre-wrap leading-relaxed ${getBubbleClass(isMe, isJellyChat)}`}>
+                                            {msg.text}
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </div>

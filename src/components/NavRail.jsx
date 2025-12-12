@@ -10,7 +10,9 @@ export default function NavRail() {
         openModal,
         openOverlay,
         setViewedProfile,
-        theme
+        theme,
+        toggleSidebar,
+        isSidebarCollapsed
     } = useApp();
 
     const navItems = [
@@ -42,7 +44,16 @@ export default function NavRail() {
                     return (
                         <button
                             key={item.id}
-                            onClick={() => setActiveTab(item.id)}
+                            onClick={() => {
+                                if (isActive && item.id === 'chat') {
+                                    toggleSidebar();
+                                } else {
+                                    setActiveTab(item.id);
+                                    if (item.id === 'chat' && isSidebarCollapsed) {
+                                        toggleSidebar(); // Auto open if switching to chat
+                                    }
+                                }
+                            }}
                             className={`w-full aspect-square rounded-xl flex items-center justify-center transition-all duration-300 relative group ${isActive
                                 ? 'bg-gradient-to-br from-cyan-500 to-blue-600 text-white shadow-lg shadow-cyan-500/30'
                                 : 'theme-text-secondary hover:bg-white/10 hover:theme-text-primary'

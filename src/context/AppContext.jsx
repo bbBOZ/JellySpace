@@ -1,11 +1,14 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useToast } from '../components/Toast';
 import { supabase, auth, profiles, settings, friendships, conversations, messages, posts as postsAPI, storage } from '../lib/supabase';
 import { cache, CACHE_KEYS, isOnline, onNetworkChange } from '../lib/cache';
 import { chat as aiChat } from '../lib/ai';
+import { compressImage } from '../lib/imageUtils';
 
 const AppContext = createContext(null);
 
 export function AppProvider({ children }) {
+    const showToast = useToast();
     // 认证状态
     const [currentUser, setCurrentUser] = useState(null);
     const [userProfile, setUserProfile] = useState(null);
@@ -54,7 +57,8 @@ export function AppProvider({ children }) {
         decoStore: false,
         postDetail: false,
         friendRequests: false,
-        groupProfile: false
+        groupProfile: false,
+        shareCard: false
     });
 
     const [overlays, setOverlays] = useState({
@@ -153,14 +157,24 @@ export function AppProvider({ children }) {
                 if (sender) cache.set(CACHE_KEYS.USER_PROFILE, sender, newMsg.sender_id);
             }
 
+            // 智能推断消息类型 (处理数据库无 message_type 列的情况)
+            let inferredType = newMsg.message_type || 'text';
+            let inferredMediaUrl = newMsg.media_url || null;
+
+            // 简单的图片 URL 检测：如果是 Supabase Storage URL
+            if ((!inferredType || inferredType === 'text') && newMsg.content?.includes('/storage/v1/object/public/')) {
+                inferredType = 'image';
+                inferredMediaUrl = newMsg.content;
+            }
+
             const formattedMsg = {
                 id: newMsg.id,
                 senderId: newMsg.sender_id,
                 text: newMsg.content,
                 time: formatTime(newMsg.created_at),
                 timestamp: newMsg.created_at, // Add timestamp for sorting/diff
-                message_type: newMsg.message_type || 'text',
-                media_url: newMsg.media_url,
+                message_type: inferredType,
+                media_url: inferredMediaUrl,
                 sender: sender // Ensure sender is attached
             };
 
@@ -428,7 +442,7 @@ export function AppProvider({ children }) {
 
     // 同步帖子
     const syncPosts = async () => {
-        const { data } = await postsAPI.list();
+        const { data, error } = await postsAPI.list();
         if (data) {
             const postsList = data.map(post => ({
                 id: post.id,
@@ -440,10 +454,15 @@ export function AppProvider({ children }) {
                 likedBy: post.likes?.map(l => l.user_id) || [],
                 commentsList: [],
                 shares: post.shares || 0,
-                isPinned: post.is_pinned
+                isPinned: post.is_pinned,
+                image_url: post.image_url
             }));
             setPosts(postsList);
             cache.set(CACHE_KEYS.POSTS, postsList);
+        }
+        if (error) {
+            console.error('Sync error:', error);
+            showToast.error('刷新失败', error.message || '无法加载帖子');
         }
     };
 
@@ -668,64 +687,173 @@ export function AppProvider({ children }) {
     };
 
     // 发送消息
-    const sendMessage = async (chatId, content) => {
-        if (!currentUser || !content.trim()) return;
+    const sendMessage = async (chatId, content, type = 'text', mediaUrl = null) => {
+        if (!currentUser) return;
+        if (type === 'text' && !content.trim()) return;
 
-        const { data, error } = await messages.send(chatId, currentUser.id, content);
+        // 1. 立即更新界面（乐观更新）
+        const newMessage = {
+            id: `temp-${Date.now()}`,
+            senderId: currentUser.id,
+            text: content,
+            message_type: type,
+            media_url: mediaUrl,
+            time: '发送中...',
+            sender: userProfile || currentUser,
+            isSending: true
+        };
+
+        setMessagesList(prev => ({
+            ...prev,
+            [chatId]: [...(prev[chatId] || []), newMessage]
+        }));
+
+        // 2. 发送请求
+        console.log('[sendMessage] Calling messages.send with:', { chatId, content, type, mediaUrl });
+        const { data, error } = await messages.send(chatId, currentUser.id, content, type, mediaUrl);
+        console.log('[sendMessage] messages.send Result:', { data, error });
 
         if (error) {
-            console.error('❌ 发送消息失败:', error);
+            console.error('Send message error:', error);
+            showToast.error('发送失败');
+            // Remove temp message
+            setMessagesList(prev => ({
+                ...prev,
+                [chatId]: prev[chatId].filter(m => m.id !== newMessage.id)
+            }));
             return { data: null, error };
         }
 
-        if (data) {
-            const newMessage = {
-                id: data.id,
-                senderId: data.sender_id,
-                text: data.content,
-                time: formatTime(data.created_at),
-                timestamp: data.created_at,
-                sender: currentUser // Add sender for immediate display
+        // 3. 更新成功状态
+        setMessagesList(prev => {
+            const currentList = prev[chatId] || [];
+            const updatedList = currentList.map(msg =>
+                msg.id === newMessage.id ? {
+                    id: data.id,
+                    senderId: data.sender_id,
+                    text: data.content,
+                    time: formatTime(data.created_at),
+                    timestamp: data.created_at,
+                    sender: userProfile || currentUser,
+                    // 数据库没返回 message_type，我们根据发送时的 type 自行填充
+                    message_type: data?.message_type || type,
+                    media_url: data?.media_url || (type === 'image' ? data.content : null),
+                    isSending: false
+                } : msg
+            );
+            const updatedState = { ...prev, [chatId]: updatedList };
+            cache.set(CACHE_KEYS.MESSAGES, updatedState, currentUser.id);
+            return updatedState;
+        });
+
+        setChats(prev => {
+            const chatIndex = prev.findIndex(chat => chat.id === chatId);
+            if (chatIndex === -1) return prev;
+
+            const updatedChat = {
+                ...prev[chatIndex],
+                lastMessage: content,
+                time: '刚刚',
+                lastMessageTime: new Date().toISOString()
             };
 
-            setMessagesList(prev => {
-                const updated = {
-                    ...prev,
-                    [chatId]: [...(prev[chatId] || []), newMessage]
-                };
-                cache.set(CACHE_KEYS.MESSAGES, updated, currentUser.id);
-                return updated;
-            });
+            const tempChats = [updatedChat, ...prev.filter(c => c.id !== chatId)];
+            const sortedChats = sortChats(tempChats);
 
-            setChats(prev => {
-                const chatIndex = prev.findIndex(chat => chat.id === chatId);
-                if (chatIndex === -1) return prev;
-
-                const updatedChat = {
-                    ...prev[chatIndex],
-                    lastMessage: content,
-                    time: '刚刚',
-                    lastMessageTime: new Date().toISOString()
-                };
-
-                const tempChats = [updatedChat, ...prev.filter(c => c.id !== chatId)];
-                const sortedChats = sortChats(tempChats);
-
-                cache.set(CACHE_KEYS.CONVERSATIONS, sortedChats, currentUser.id);
-                return sortedChats;
-            });
+            cache.set(CACHE_KEYS.CONVERSATIONS, sortedChats, currentUser.id);
+            return sortedChats;
+        });
 
 
-            // 检查 AI 回复
-            const chat = chats.find(c => c.id === chatId);
-            const isJellyChat = chat?.name?.toLowerCase() === 'jelly' ||
-                chat?.userId?.toLowerCase?.() === 'jelly' ||
-                chat?.name === '果冻';
-            if (isJellyChat) {
-                triggerJellyReply(chatId, content);
-            }
+        // 检查 AI 回复
+        const chat = chats.find(c => c.id === chatId);
+        const isJellyChat = chat?.name?.toLowerCase() === 'jelly' ||
+            chat?.userId?.toLowerCase?.() === 'jelly' ||
+            chat?.name === '果冻';
+        if (isJellyChat) {
+            triggerJellyReply(chatId, content);
         }
+
         return { data, error };
+    };
+
+    const sendImageMessage = async (chatId, file, previewUrl) => {
+        if (!currentUser) return;
+        const tempId = 'temp-' + Date.now();
+        const tempMsg = {
+            id: tempId,
+            senderId: currentUser.id,
+            text: '',
+            message_type: 'image',
+            media_url: previewUrl,
+            time: '刚刚',
+            timestamp: new Date().toISOString(),
+            sender: userProfile || currentUser,
+            status: 'sending'
+        };
+
+        // 1. Optimistic Update
+        setMessagesList(prev => ({
+            ...prev,
+            [chatId]: [...(prev[chatId] || []), tempMsg]
+        }));
+
+        // Update conversation list last message (Optional, but good for consistency)
+        setChats(prev => {
+            const chatIndex = prev.findIndex(c => c.id === chatId);
+            if (chatIndex === -1) return prev;
+            const updated = { ...prev[chatIndex], lastMessage: '[图片]', time: '刚刚', lastMessageTime: new Date().toISOString() };
+            return sortChats([updated, ...prev.filter(c => c.id !== chatId)]);
+        });
+
+        try {
+            // 2. Compress
+            let fileToUpload = file;
+            try {
+                fileToUpload = await compressImage(file, 1);
+            } catch (err) {
+                console.error('[sendImageMessage] Compression failed:', err);
+            }
+
+            // 3. Upload
+            console.log('[sendImageMessage] Uploading...');
+            const { data: uploadData, error: uploadError } = await storage.uploadChatFile(chatId, fileToUpload);
+            if (uploadError || !uploadData?.publicUrl) throw uploadError || new Error('Upload failed');
+
+            // 4. Send DB Record
+            console.log('[sendImageMessage] Sending DB record...');
+            // Pass publicUrl as content for fallback
+            const { data: dbMsg, error: dbError } = await messages.send(chatId, currentUser.id, uploadData.publicUrl, 'image', uploadData.publicUrl);
+            if (dbError) throw dbError;
+
+            // 5. Success Update
+            setMessagesList(prev => {
+                const list = prev[chatId] || [];
+                return {
+                    ...prev,
+                    [chatId]: list.map(m => m.id === tempId ? {
+                        ...m,
+                        id: dbMsg.id,
+                        status: 'sent',
+                        text: uploadData.publicUrl, // Ensure text is updated to URL for sync
+                        media_url: uploadData.publicUrl,
+                        timestamp: dbMsg.created_at
+                    } : m)
+                };
+            });
+
+        } catch (error) {
+            console.error('[sendImageMessage] Failed:', error);
+            // 6. Failure Update
+            showToast.error('图片发送失败');
+            setMessagesList(prev => {
+                const list = prev[chatId] || [];
+                return {
+                    ...prev,
+                    [chatId]: list.map(m => m.id === tempId ? { ...m, status: 'error' } : m)
+                };
+            });
+        }
     };
 
     // Jelly AI 回复
@@ -782,16 +910,28 @@ export function AppProvider({ children }) {
             setMessagesList(prev => {
                 const updated = {
                     ...prev,
-                    [chatId]: data.map(msg => ({
-                        id: msg.id,
-                        senderId: msg.sender_id,
-                        text: msg.content,
-                        time: formatTime(msg.created_at),
-                        timestamp: msg.created_at,
-                        sender: msg.sender, // Preserve sender from join
-                        message_type: msg.message_type,
-                        media_url: msg.media_url
-                    }))
+                    [chatId]: data.map(msg => {
+                        // 智能推断消息类型 (处理数据库无 message_type 列的情况)
+                        let inferredType = msg.message_type || 'text';
+                        let inferredMediaUrl = msg.media_url || null;
+
+                        // 简单的图片 URL 检测：如果是 Supabase Storage URL
+                        if ((!inferredType || inferredType === 'text') && msg.content?.includes('/storage/v1/object/public/')) {
+                            inferredType = 'image';
+                            inferredMediaUrl = msg.content;
+                        }
+
+                        return {
+                            id: msg.id,
+                            senderId: msg.sender_id,
+                            text: msg.content,
+                            time: formatTime(msg.created_at),
+                            timestamp: msg.created_at,
+                            sender: msg.sender, // Preserve sender from join
+                            message_type: inferredType,
+                            media_url: inferredMediaUrl
+                        };
+                    })
                 };
                 if (currentUser?.id) {
                     cache.set(CACHE_KEYS.MESSAGES, updated, currentUser.id);
@@ -817,10 +957,22 @@ export function AppProvider({ children }) {
     // 创建帖子、点赞、评论等其他逻辑保持不变...
     // 此处简化，只保留核心，假设未修改部分照旧
 
-    const createPost = async (title, content) => {
+    const createPost = async (title, content, imageFile = null) => {
         if (!currentUser) return;
-        const { data, error } = await postsAPI.create(currentUser.id, title, content);
-        if (data) await loadPosts();
+        let imageUrl = null;
+
+        if (imageFile) {
+            const { url, error: uploadError } = await storage.uploadPostImage(currentUser.id, imageFile);
+            if (uploadError) {
+                console.error('Image upload failed:', uploadError);
+                return { error: uploadError };
+            }
+            imageUrl = url;
+            console.log('Post Image URL Generated:', imageUrl);
+        }
+
+        const { data, error } = await postsAPI.create(currentUser.id, title, content, imageUrl);
+        if (data) await syncPosts();
         return { data, error };
     };
 
@@ -845,12 +997,46 @@ export function AppProvider({ children }) {
         if (data) {
             setPosts(prev => prev.map(p => {
                 if (p.id === postId) {
-                    return { ...p, commentsList: [...(p.commentsList || []), { ...data, date: '刚刚' }] };
+                    return {
+                        ...p,
+                        commentsList: [...(p.commentsList || []), {
+                            id: data.id,
+                            authorId: currentUser.id,
+                            content: content,
+                            date: '刚刚'
+                        }],
+                        comments: [{ count: (p.comments?.[0]?.count || 0) + 1 }]
+                    };
                 }
                 return p;
             }));
+
+            // Also update viewedPost if it's the one we commented on
+            if (viewedPost?.id === postId) {
+                setViewedPost(prev => ({
+                    ...prev,
+                    commentsList: [...(prev.commentsList || []), {
+                        id: data.id,
+                        authorId: currentUser.id,
+                        content: content,
+                        date: '刚刚'
+                    }],
+                    comments: [{ count: (prev.comments?.[0]?.count || 0) + 1 }]
+                }));
+            }
         }
-        return { data, error };
+    };
+
+    const deletePost = async (postId) => {
+        if (!currentUser) return;
+        const { error } = await postsAPI.delete(postId, currentUser.id);
+        if (!error) {
+            setPosts(prev => prev.filter(p => p.id !== postId));
+            showToast.success('删除成功', '您的动态已删除');
+        } else {
+            showToast.error('删除失败', error.message);
+        }
+        return { error };
     };
 
     const saveSettings = async (newSettings) => {
@@ -942,6 +1128,21 @@ export function AppProvider({ children }) {
     };
 
     const addFriend = sendFriendRequest;
+
+    const deleteFriend = async (friendId) => {
+        if (!currentUser) return { success: false };
+        const { error } = await friendships.remove(currentUser.id, friendId);
+        if (error) return { success: false, message: error.message };
+
+        setFriends(prev => {
+            const updated = prev.filter(f => f.id !== friendId);
+            cache.set(CACHE_KEYS.FRIENDS_LIST, updated, currentUser.id);
+            return updated;
+        });
+
+        // Optionally close private chat if needed, but not strictly required
+        return { success: true };
+    };
 
 
 
@@ -1084,9 +1285,10 @@ export function AppProvider({ children }) {
         bgStyle, setBgStyle,
         bubbleStyle, setBubbleStyle,
         fontStyle, setFontStyle,
+        toggleSidebar, isSidebarCollapsed,
         chats, messages: messagesList, posts, friends, groupChats,
-        sendMessage, createPost, likePost, addComment, searchUser,
-        addFriend, sendFriendRequest, loadPendingRequests, acceptFriendRequest, rejectFriendRequest,
+        sendMessage, createPost, likePost, addComment, deletePost, searchUser,
+        addFriend, sendFriendRequest, deleteFriend, loadPendingRequests, acceptFriendRequest, rejectFriendRequest,
         pendingRequests, createGroup, addGroupMembers, createPrivateChat, updateProfile, uploadAvatar, getUserById, fetchFullProfile,
         unreadCounts, loadUnreadCounts, markChatAsRead, enterChat,
         modals, openModal, closeModal,
@@ -1094,7 +1296,9 @@ export function AppProvider({ children }) {
         viewedPost, setViewedPost, openPostDetail,
         viewedProfile, setViewedProfile,
         isSidebarCollapsed, toggleSidebar,
-        realtimeStatus // 暴露连接状态
+        realtimeStatus, // 暴露连接状态
+        showToast,
+        sendImageMessage
     };
 
     return (

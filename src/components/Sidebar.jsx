@@ -5,10 +5,47 @@ import { UniversalAvatar } from './UniversalAvatar';
 
 
 export default function Sidebar() {
-    const { chats, activeChatId, enterChat, activeTab, friends, groupChats, openModal, setViewedProfile, openOverlay, unreadCounts, realtimeStatus, isSidebarCollapsed, pendingRequests, loadPendingRequests, currentUser } = useApp();
+    const { chats, activeChatId, enterChat, activeTab, friends, groupChats, openModal, setViewedProfile, openOverlay, unreadCounts, realtimeStatus, isSidebarCollapsed, toggleSidebar, pendingRequests, loadPendingRequests, currentUser } = useApp();
     const [searchTerm, setSearchTerm] = useState('');
     const [sidebarTab, setSidebarTab] = useState('chats'); // 'chats' | 'friends'
     const [showQuickActions, setShowQuickActions] = useState(false);
+
+    // Sidebar Drag Logic
+    const [position, setPosition] = useState({ x: 0, y: 0 });
+    const [isDragging, setIsDragging] = useState(false);
+    const dragStartRef = useRef({ x: 0, y: 0 });
+
+    useEffect(() => {
+        const handleMouseMove = (e) => {
+            if (!isDragging) return;
+            const newX = e.clientX - dragStartRef.current.x;
+            const newY = e.clientY - dragStartRef.current.y;
+            setPosition({ x: newX, y: newY });
+        };
+
+        const handleMouseUp = () => {
+            setIsDragging(false);
+        };
+
+        if (isDragging) {
+            window.addEventListener('mousemove', handleMouseMove);
+            window.addEventListener('mouseup', handleMouseUp);
+        }
+
+        return () => {
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mouseup', handleMouseUp);
+        };
+    }, [isDragging]);
+
+    const handleMouseDown = (e) => {
+        if (e.target.closest('button') || e.target.closest('input')) return;
+        setIsDragging(true);
+        dragStartRef.current = {
+            x: e.clientX - position.x,
+            y: e.clientY - position.y
+        };
+    };
 
     // 加载待处理的好友请求
     useEffect(() => {
@@ -56,20 +93,41 @@ export default function Sidebar() {
     const groupedFriends = getSortedFriends();
 
     return (
-        <div className={`${isSidebarCollapsed ? 'w-0 opacity-0 overflow-hidden border-none' : 'w-80 opacity-100 border-r'} h-full theme-bg-sidebar flex flex-col theme-border transition-all duration-300`}>
+        <div
+            className={`
+                fixed top-1/2 left-1/2 z-50
+                ${isSidebarCollapsed
+                    ? 'opacity-0 scale-90 pointer-events-none'
+                    : 'opacity-100 scale-100 pointer-events-auto'} 
+                w-80 sm:w-[420px] h-[600px] max-h-[85vh]
+                bg-[#0f172a]/90 backdrop-blur-3xl
+                border border-white/10
+                rounded-[32px]
+                flex flex-col
+                shadow-[0_0_100px_-20px_rgba(0,0,0,0.7)]
+                transition-all cubic-bezier(0.16, 1, 0.3, 1)
+                overflow-hidden
+                -translate-x-1/2 -translate-y-1/2
+                ${isDragging ? 'duration-0 cursor-grabbing' : 'duration-300'}
+            `}
+            style={{
+                left: `calc(50% + ${position.x}px)`,
+                top: `calc(50% + ${position.y}px)`
+            }}
+        >
             {/* 状态栏 + 标题 */}
-            <div className="px-4 pt-4 pb-2 flex items-center justify-between">
-                <h2 className="text-lg font-bold theme-text-primary tracking-wide">消息</h2>
-                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-white/5 border border-white/5">
-                    <div className={`w-2 h-2 rounded-full transition-all duration-500 ${realtimeStatus === 'connected' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' :
-                        realtimeStatus === 'connecting' ? 'bg-yellow-500 animate-pulse' :
-                            'bg-red-500'
-                        }`} />
-                    <span className="text-[10px] theme-text-secondary font-medium">
-                        {realtimeStatus === 'connected' ? '在线' :
-                            realtimeStatus === 'connecting' ? '连接中...' : '离线'}
-                    </span>
-                </div>
+            <div
+                className="px-5 pt-5 pb-3 flex items-center justify-between cursor-grab active:cursor-grabbing select-none"
+                onMouseDown={handleMouseDown}
+            >
+                <h2 className="text-xl font-bold text-white tracking-wide pointer-events-none">消息</h2>
+                <button
+                    onClick={toggleSidebar}
+                    className="p-1.5 rounded-full hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+                    onMouseDown={(e) => e.stopPropagation()}
+                >
+                    <X size={20} />
+                </button>
             </div>
 
             {/* 搜索栏 */}
@@ -99,47 +157,44 @@ export default function Sidebar() {
                             <div
                                 key={chat.id}
                                 onClick={() => enterChat(chat.id)}
-                                className={`p-3 rounded-xl cursor-pointer transition-all duration-200 group relative ${isActive
-                                    ? 'bg-gradient-to-r from-cyan-500/20 to-blue-500/20 border border-cyan-500/30'
-                                    : 'hover:bg-white/5 border border-transparent'
-                                    }`}
+                                className={`w-full p-3 flex items-center gap-3 transition-all duration-200 cursor-pointer rounded-xl mx-2
+                                    ${isActive
+                                        ? 'bg-blue-600/20 md:bg-blue-500/10 border border-blue-500/30 shadow-[0_0_20px_rgba(59,130,246,0.15)]'
+                                        : 'hover:bg-white/5 border border-transparent'}
+                                    w-[calc(100%-16px)]
+                                `}
                             >
-                                <div className="flex items-center gap-3">
-                                    <div className="relative">
-                                        <UniversalAvatar
-                                            user={{
-                                                display_id: userId,
-                                                username: name,
-                                                avatar_url: avatar
-                                            }}
-                                            chatType={chat.type}
-                                            size="w-12 h-12"
-                                            className="bg-gray-800 border-2 border-transparent group-hover:border-cyan-500/50 transition-colors"
-                                        />
-                                        <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-[#0f172a]"></div>
+                                <div className="relative flex-shrink-0">
+                                    <UniversalAvatar
+                                        user={{
+                                            ...chat,
+                                            id: chat.userId,
+                                            avatar_url: avatar
+                                        }}
+                                        chatType={chat.type}
+                                        size="w-10 h-10"
+                                        className={`transition-colors rounded-full ${isActive ? 'ring-2 ring-blue-500/50' : ''}`}
+                                    />
+                                    {/* Status Dot */}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex justify-between items-center mb-0.5">
+                                        <h3 className={`font-medium text-sm truncate ${isActive ? 'text-blue-100' : 'text-gray-200 group-hover:text-white'}`}>
+                                            {name}
+                                        </h3>
+                                        <span className="text-[10px] text-gray-500 font-mono tracking-tight">{chat.time}</span>
                                     </div>
-                                    <div className="flex-1 min-w-0">
-                                        <div className="flex justify-between items-center mb-1">
-                                            <h3 className={`font-medium truncate ${isActive ? 'theme-text-primary' : 'theme-text-secondary group-hover:theme-text-primary'}`}>
-                                                {name}
-                                            </h3>
-                                            <span className="text-xs text-gray-500">{chat.time}</span>
-                                        </div>
-                                        <div className="flex justify-between items-center">
-                                            <p className="text-sm text-gray-500 truncate max-w-[140px]">
-                                                {chat.lastMessage}
-                                            </p>
-                                            {unreadCount > 0 && (
-                                                <span className="w-5 h-5 flex items-center justify-center bg-red-500 text-white text-xs font-bold rounded-full shadow-lg shadow-red-500/30 animate-pulse">
-                                                    {unreadCount > 9 ? '9+' : unreadCount}
-                                                </span>
-                                            )}
-                                        </div>
+                                    <div className="flex justify-between items-center">
+                                        <p className={`text-xs truncate max-w-[160px] ${isActive ? 'text-blue-200/60' : 'text-gray-500'}`}>
+                                            {chat.lastMessage || '暂无消息'}
+                                        </p>
+                                        {unreadCount > 0 && (
+                                            <span className="min-w-[16px] h-[16px] px-1 flex items-center justify-center bg-blue-500 text-white text-[10px] font-bold rounded-full shadow-lg shadow-blue-500/30">
+                                                {unreadCount > 9 ? '9+' : unreadCount}
+                                            </span>
+                                        )}
                                     </div>
                                 </div>
-                                {isActive && (
-                                    <div className="absolute inset-0 bg-cyan-500/5 rounded-xl blur-xl -z-10"></div>
-                                )}
                             </div>
                         );
                     })}
@@ -290,13 +345,6 @@ export default function Sidebar() {
                             >
                                 <Users className="w-4 h-4 text-purple-500" />
                                 创建群聊
-                            </button>
-                            <button
-                                onClick={() => { openModal('createPost'); setShowQuickActions(false); }}
-                                className="flex items-center gap-3 px-3 py-2 theme-hover rounded-lg text-sm theme-text-primary transition-colors"
-                            >
-                                <ImageIcon className="w-4 h-4 text-pink-500" />
-                                发布动态
                             </button>
                         </div>
                     )}

@@ -7,6 +7,7 @@ import CommunityView from './components/CommunityView';
 import Background from './components/Background';
 import Loader from './components/Loader';
 import ProfileOverlay from './components/ProfileOverlay';
+import NotificationOverlay from './components/NotificationOverlay';
 import AboutOverlay from './components/AboutOverlay';
 import StarLinkOverlay from './components/StarLinkOverlay';
 import {
@@ -19,6 +20,7 @@ import {
     PostDetailModal,
     GroupProfileModal
 } from './components/Modals';
+import ShareCardModal from './components/ShareCardModal';
 
 function AppContent() {
     const { isAuthenticated, activeTab, isLoading, isSidebarCollapsed } = useApp();
@@ -44,17 +46,18 @@ function AppContent() {
                     <div className="flex-1 h-full relative theme-bg-chat flex flex-col overflow-hidden">
                         {/* 聊天视图 */}
                         {(activeTab === 'chat' || activeTab === 'chats') && (
-                            <ChatView key={isSidebarCollapsed ? 'collapsed' : 'expanded'} />
+                            <ChatView />
                         )}
 
-                        {/* 社区视图 (暂时隐藏以免重叠) */}
-                        {/* {activeTab === 'community' && <CommunityView />} */}
+                        {/* 社区视图 */}
+                        {activeTab === 'community' && <CommunityView />}
                     </div>
                 </div>
             )}
 
             {/* 叠加层 */}
             <ProfileOverlay />
+            <NotificationOverlay />
             <AboutOverlay />
             <StarLinkOverlay />
 
@@ -67,14 +70,19 @@ function AppContent() {
             <DecoStoreModal />
             <PostDetailModal />
             <GroupProfileModal />
+            <ShareCardModal />
         </div>
     );
 }
 
+import { ToastProvider } from './components/Toast';
+
 export default function App() {
     return (
-        <AppProvider>
-            <AppContent />
-        </AppProvider>
+        <ToastProvider>
+            <AppProvider>
+                <AppContent />
+            </AppProvider>
+        </ToastProvider>
     );
 }

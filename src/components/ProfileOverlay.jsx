@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, Share2, MessageCircle } from 'lucide-react';
+import { ArrowLeft, Share2, MessageCircle, UserPlus, UserMinus, Trash2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { DEFAULT_SHADER_CODE } from '../data/constants';
 
@@ -13,8 +13,14 @@ export default function ProfileOverlay() {
         posts,
         setIsLoading,
         createPrivateChat,
+
         setActiveChatId,
-        setActiveTab
+        setActiveTab,
+        friends,
+        addFriend, // alias for sendFriendRequest usually
+        sendFriendRequest,
+        deleteFriend,
+        showToast
     } = useApp();
 
     const [isEditing, setIsEditing] = useState(false);
@@ -261,13 +267,54 @@ export default function ProfileOverlay() {
                             )}
                             {!isOwnProfile && (
                                 <div className="flex gap-3">
-                                    <button
-                                        onClick={handleSendMessage}
-                                        className="px-6 py-2.5 bg-cyan-600 text-white rounded-xl font-bold hover:bg-cyan-500 shadow-lg shadow-cyan-900/30 transition-all flex items-center gap-2"
-                                    >
-                                        <MessageCircle className="w-5 h-5" />
-                                        发消息
-                                    </button>
+                                    {/* 判断是否是好友 */}
+                                    {friends?.some(f => f.id === profile.id) ? (
+                                        // 是好友：显示发消息、删除好友
+                                        <>
+                                            <button
+                                                onClick={handleSendMessage}
+                                                className="px-6 py-2.5 bg-cyan-600 text-white rounded-xl font-bold hover:bg-cyan-500 shadow-lg shadow-cyan-900/30 transition-all flex items-center gap-2"
+                                            >
+                                                <MessageCircle className="w-5 h-5" />
+                                                发消息
+                                            </button>
+                                            <button
+                                                onClick={async () => {
+                                                    if (confirm('确定要删除该好友吗？')) {
+                                                        const res = await deleteFriend(profile.id);
+                                                        if (res.success) {
+                                                            showToast.success('删除成功');
+                                                            closeOverlay('profile');
+                                                        } else {
+                                                            showToast.error('删除失败', res.message);
+                                                        }
+                                                    }
+                                                }}
+                                                className="px-4 py-2.5 bg-red-500/10 text-red-500 rounded-xl font-bold hover:bg-red-500/20 transition-all flex items-center gap-2"
+                                            >
+                                                <UserMinus className="w-5 h-5" />
+                                                删好友
+                                            </button>
+                                        </>
+                                    ) : (
+                                        // 不是好友：显示添加好友
+                                        <button
+                                            onClick={async () => {
+                                                const res = await sendFriendRequest(profile);
+                                                if (res.success) {
+                                                    showToast.success('请求发送成功', res.message);
+                                                } else {
+                                                    showToast.error('请求失败', res.message);
+                                                }
+                                            }}
+                                            className="px-6 py-2.5 bg-cyan-600 text-white rounded-xl font-bold hover:bg-cyan-500 shadow-lg shadow-cyan-900/30 transition-all flex items-center gap-2"
+                                        >
+                                            <UserPlus className="w-5 h-5" />
+                                            加好友
+                                        </button>
+                                    )}
+
+                                    {/* Share Button (Optional, keep if needed) */}
                                     <button className="p-2.5 border theme-border rounded-xl theme-text-secondary hover:bg-white/5">
                                         <Share2 className="w-5 h-5" />
                                     </button>
@@ -399,6 +446,14 @@ export default function ProfileOverlay() {
                                 >
                                     <div className="text-xs theme-text-secondary mb-2">{post.date}</div>
                                     <h4 className="font-bold text-lg mb-2 theme-text-primary">{post.title}</h4>
+                                    {post.image_url && (
+                                        <img
+                                            src={post.image_url}
+                                            alt={post.title}
+                                            className="w-full h-48 object-cover rounded-xl mb-3 border theme-border"
+                                            loading="lazy"
+                                        />
+                                    )}
                                     <p className="text-sm theme-text-secondary leading-relaxed">{post.content}</p>
                                 </div>
                             ))

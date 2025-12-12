@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, Hash, UserPlus, Users, ImagePlus, Heart, MessageCircle, Share2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { MOCK_USERS, BUBBLE_STYLES, FONT_STYLES } from '../data/constants';
@@ -6,7 +6,7 @@ import { decorations as decorationsAPI, conversations } from '../lib/supabase';
 
 // 添加好友模态框
 export function AddFriendModal() {
-    const { modals, closeModal, searchUser, addFriend } = useApp();
+    const { modals, closeModal, searchUser, addFriend, showToast } = useApp();
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResult, setSearchResult] = useState(null);
     const [error, setError] = useState('');
@@ -32,12 +32,12 @@ export function AddFriendModal() {
 
         const result = await addFriend(searchResult);
         if (result.success) {
-            alert(result.message || '好友请求已发送！');
+            showToast.success('发送成功', result.message || '好友请求已发送！');
             closeModal('addFriend');
             setSearchQuery('');
             setSearchResult(null);
         } else {
-            alert(result.message);
+            showToast.error('发送失败', result.message);
         }
     };
 
@@ -120,7 +120,7 @@ export function FriendRequestsModal() {
         modals, closeModal,
         pendingRequests, loadPendingRequests,
         acceptFriendRequest, rejectFriendRequest,
-        setIsLoading
+        setIsLoading, showToast
     } = useApp();
 
     // 加载待处理请求
@@ -135,9 +135,9 @@ export function FriendRequestsModal() {
         const result = await acceptFriendRequest(request.id, request.sender);
         setIsLoading(false);
         if (result.success) {
-            alert(`已接受 ${request.sender?.username || '用户'} 的好友请求！`);
+            showToast.success('操作成功', `已接受 ${request.sender?.username || '用户'} 的好友请求！`);
         } else {
-            alert('操作失败: ' + (result.message || '未知错误'));
+            showToast.error('操作失败', result.message || '未知错误');
         }
     };
 
@@ -146,9 +146,9 @@ export function FriendRequestsModal() {
         const result = await rejectFriendRequest(request.id);
         setIsLoading(false);
         if (result.success) {
-            alert('已拒绝好友请求');
+            showToast.info('已拒绝', '已拒绝好友请求');
         } else {
-            alert('操作失败: ' + (result.message || '未知错误'));
+            showToast.error('操作失败', result.message || '未知错误');
         }
     };
 
@@ -224,7 +224,7 @@ export function FriendRequestsModal() {
 
 // 创建群聊模态框
 export function CreateGroupModal() {
-    const { modals, closeModal, createGroup, setIsLoading, friends } = useApp();
+    const { modals, closeModal, createGroup, setIsLoading, friends, showToast } = useApp();
     const [groupName, setGroupName] = useState('');
     const [selectedFriends, setSelectedFriends] = useState([]);
 
@@ -232,11 +232,11 @@ export function CreateGroupModal() {
 
     const handleCreateGroup = () => {
         if (!groupName) {
-            alert('请输入群名称');
+            showToast.warning('请输入', '请输入群名称');
             return;
         }
         if (selectedFriends.length === 0) {
-            alert('请至少选择一位好友');
+            showToast.warning('请选择', '请至少选择一位好友');
             return;
         }
         setIsLoading(true);
@@ -247,9 +247,9 @@ export function CreateGroupModal() {
                 setGroupName('');
                 setSelectedFriends([]);
                 closeModal('createGroup');
-                alert(`群聊创建成功！`);
+                showToast.success('创建成功', '群聊创建成功！');
             } else {
-                alert('创建失败，请重试');
+                showToast.error('创建失败', '请重试');
             }
         });
     };
@@ -336,22 +336,65 @@ export function CreateGroupModal() {
 
 // 发帖模态框
 export function CreatePostModal() {
-    const { modals, closeModal, createPost } = useApp();
+    const { modals, closeModal, createPost, showToast } = useApp();
     const [title, setTitle] = useState('');
     const [content, setContent] = useState('');
+    const [selectedImage, setSelectedImage] = useState(null);
+    const [previewUrl, setPreviewUrl] = useState('');
+    const fileInputRef = useRef(null);
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
     if (!modals.createPost) return null;
 
-    const handleSubmit = () => {
+    const handleImageSelect = async (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            try {
+                if (file.size > 10 * 1024 * 1024) {
+                    showToast.error('图片过大', '图片大小不能超过 10MB。', 'https://help.jelly.chat/image-size');
+                    return;
+                }
+
+                let fileToUpload = file;
+                if (file.size > 2 * 1024 * 1024) {
+                    showToast.info('正在压缩', '图片大于 2MB，正在自动压缩中...');
+                    try {
+                        fileToUpload = await compressImage(file);
+                    } catch (err) {
+                        console.error("Compression failed:", err);
+                        showToast.warning('压缩失败', '图片压缩失败，将尝试原图上传。');
+                    }
+                }
+
+                setSelectedImage(fileToUpload);
+                const url = URL.createObjectURL(fileToUpload);
+                setPreviewUrl(url);
+            } catch (error) {
+                console.error("Image select error:", error);
+                showToast.error('图片处理失败', error.message);
+            }
+        }
+    };
+
+    const handleSubmit = async () => {
         if (!title || !content) {
-            alert('请输入标题和内容');
+            showToast.warning('信息不全', '请输入标题和内容');
             return;
         }
-        createPost(title, content);
-        setTitle('');
-        setContent('');
-        closeModal('createPost');
-        alert('发布成功！');
+        setIsSubmitting(true);
+        const result = await createPost(title, content, selectedImage);
+        setIsSubmitting(false);
+
+        if (result?.error) {
+            showToast.error('发布失败', result.error.message);
+        } else {
+            showToast.success('发布成功', '您的动态已发布！');
+            setTitle('');
+            setContent('');
+            setSelectedImage(null);
+            setPreviewUrl('');
+            closeModal('createPost');
+        }
     };
 
     return (
@@ -387,15 +430,46 @@ export function CreatePostModal() {
                         placeholder="分享你的想法..."
                         className="w-full glass-input rounded-xl p-3 outline-none focus:border-cyan-500 transition-colors resize-none"
                     />
-                    <div className="border-2 border-dashed theme-border rounded-xl p-6 flex flex-col items-center justify-center cursor-pointer theme-hover transition-colors group">
-                        <ImagePlus className="w-8 h-8 theme-text-secondary group-hover:text-cyan-500 mb-2" />
-                        <p className="text-sm theme-text-secondary">点击上传图片或拖拽至此处</p>
-                    </div>
+
+                    {/* Image Preview Area */}
+                    {previewUrl ? (
+                        <div className="relative rounded-xl overflow-hidden group">
+                            <img src={previewUrl} alt="Preview" className="w-full h-48 object-cover" />
+                            <button
+                                onClick={() => {
+                                    setSelectedImage(null);
+                                    setPreviewUrl('');
+                                }}
+                                className="absolute top-2 right-2 p-1 bg-black/50 text-white rounded-full hover:bg-red-500 transition-colors"
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+                    ) : (
+                        <div
+                            className="border-2 border-dashed theme-border rounded-xl p-6 flex flex-col items-center justify-center cursor-pointer theme-hover transition-colors group"
+                            onClick={() => fileInputRef.current?.click()}
+                        >
+                            <input
+                                type="file"
+                                ref={fileInputRef}
+                                className="hidden"
+                                accept="image/*"
+                                onChange={handleImageSelect}
+                            />
+                            <ImagePlus className="w-8 h-8 theme-text-secondary group-hover:text-cyan-500 mb-2" />
+                            <p className="text-sm theme-text-secondary">点击上传图片 (Max 2MB)</p>
+                        </div>
+                    )}
+
                     <button
                         onClick={handleSubmit}
-                        className="w-full py-3 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl font-bold shadow-lg transition-all"
+                        disabled={isSubmitting}
+                        className="w-full py-3 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl font-bold shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                     >
-                        发布
+                        {isSubmitting ? (
+                            <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                        ) : '发布'}
                     </button>
                 </div>
             </div>
@@ -408,7 +482,7 @@ export function SettingsModal() {
     const {
         modals, closeModal, currentUser,
         theme, setTheme, bgStyle, setBgStyle,
-        openModal, setIsLoading, logout, updateProfile
+        openModal, setIsLoading, logout, updateProfile, showToast
     } = useApp();
 
     const [activeSection, setActiveSection] = useState('appearance');
@@ -430,14 +504,14 @@ export function SettingsModal() {
         if (newPass && confirmPass && newPass === confirmPass) {
             setIsLoading(true);
             setTimeout(() => {
-                alert('密码修改成功');
+                showToast.success('修改成功', '密码修改成功');
                 setIsLoading(false);
                 setOldPass('');
                 setNewPass('');
                 setConfirmPass('');
             }, 1000);
         } else {
-            alert('两次输入密码不一致或为空');
+            showToast.error('输入错误', '两次输入密码不一致或为空');
         }
     };
 
@@ -462,9 +536,9 @@ export function SettingsModal() {
         setIsLoading(false);
 
         if (error) {
-            alert('保存失败: ' + error.message);
+            showToast.error('保存失败', error.message);
         } else {
-            alert('Jelly 配置已保存！');
+            showToast.success('保存成功', 'Jelly 配置已保存！');
         }
     };
 
@@ -757,7 +831,7 @@ export function PostDetailModal() {
                 <div className="flex items-center justify-between p-5 border-b theme-border shrink-0">
                     <div className="flex items-center gap-3">
                         {author && (
-                            <img src={author.avatar} className="w-10 h-10 rounded-full border theme-border" alt={author.username} />
+                            <img src={author.avatar_url || `https://api.dicebear.com/7.x/notionists/svg?seed=${author.display_id}`} className="w-10 h-10 rounded-full border theme-border" alt={author.username} />
                         )}
                         <div>
                             <h3 className="font-bold text-lg">{author?.username}</h3>
@@ -778,6 +852,17 @@ export function PostDetailModal() {
                     <p className="theme-text-secondary leading-relaxed whitespace-pre-wrap mb-6">
                         {viewedPost.content}
                     </p>
+
+                    {/* Post Image */}
+                    {viewedPost.image_url && (
+                        <div className="mb-6 rounded-2xl overflow-hidden border theme-border">
+                            <img
+                                src={viewedPost.image_url}
+                                alt="Post media"
+                                className="w-full max-h-[600px] object-contain bg-black/50"
+                            />
+                        </div>
+                    )}
 
                     {/* Interaction Bar */}
                     <div className="flex items-center gap-6 py-4 border-y theme-border text-sm theme-text-secondary mb-6">
@@ -809,7 +894,7 @@ export function PostDetailModal() {
                                 const commentAuthor = getUserById(comment.authorId);
                                 return (
                                     <div key={comment.id} className="flex gap-3">
-                                        <img src={commentAuthor?.avatar} className="w-8 h-8 rounded-full" alt={commentAuthor?.username} />
+                                        <img src={commentAuthor?.avatar_url || `https://api.dicebear.com/7.x/notionists/svg?seed=${commentAuthor?.display_id}`} className="w-8 h-8 rounded-full" alt={commentAuthor?.username} />
                                         <div className="flex-1">
                                             <div className="bg-white/5 rounded-xl p-3">
                                                 <div className="flex justify-between items-center mb-1">
@@ -856,7 +941,7 @@ export function PostDetailModal() {
 
 // 装扮社区模态框
 export function DecoStoreModal() {
-    const { modals, closeModal, bubbleStyle, setBubbleStyle, currentUser, setIsLoading } = useApp();
+    const { modals, closeModal, bubbleStyle, setBubbleStyle, currentUser, setIsLoading, showToast } = useApp();
     const [activeTab, setActiveTab] = useState('browse');
     const [shaderCode, setShaderCode] = useState('');
     const [cssCode, setCssCode] = useState('');
@@ -888,7 +973,7 @@ export function DecoStoreModal() {
     const handleSubmitDecoration = async () => {
         const code = decorationType === 'shader' ? shaderCode : cssCode;
         if (!decorationName.trim() || !code.trim()) {
-            alert('请填写名称和代码');
+            showToast.warning('信息不全', '请填写名称和代码');
             return;
         }
 
@@ -932,9 +1017,9 @@ export function DecoStoreModal() {
         setIsLoading(false);
 
         if (error) {
-            alert('应用失败: ' + error.message);
+            showToast.error('应用失败', error.message);
         } else {
-            alert(`"${decoration.name}" 已应用为${decoration.target === 'background' ? '聊天背景' : '气泡样式'}！`);
+            showToast.success('应用成功', `"${decoration.name}" 已应用为${decoration.target === 'background' ? '聊天背景' : '气泡样式'}！`);
         }
     };
 
@@ -1349,7 +1434,29 @@ export function GroupProfileModal() {
                                         <div className="flex justify-center py-4"><span className="animate-spin">⏳</span></div>
                                     ) : (
                                         members.map(member => (
-                                            <div key={member?.id} className="flex items-center justify-between p-2 theme-hover rounded-xl group transition-all">
+                                            <div
+                                                key={member?.id}
+                                                className="flex items-center justify-between p-2 theme-hover rounded-xl group transition-all cursor-pointer"
+                                                onClick={() => {
+                                                    // Close this modal and open user profile
+                                                    // We shouldn't close group modal? Actually user probably wants to go deeper.
+                                                    // Request says: "Clicking user avatar enters user homepage".
+                                                    // Usually layers: GroupModal -> ProfileOverlay.
+                                                    // Or GroupModal closes.
+                                                    // Let's keep GroupModal open underneath? Or close it?
+                                                    // "enters user homepage" implies focus switch.
+                                                    // I'll close the group modal to avoid clutter, or just stack overlay.
+                                                    // Overlays stack over modals in this app?
+                                                    // AppContext handles overlays independently.
+                                                    // Let's try stacking first (don't close group modal), if it conflicts I'll close it.
+                                                    // Actually, usually you want to come back to group info.
+                                                    // But Overlay is full screen? 
+                                                    // ProfileOverlay is `full-page-overlay`.
+                                                    // So it will cover the modal.
+                                                    setViewedProfile(member);
+                                                    openOverlay('profile');
+                                                }}
+                                            >
                                                 <div className="flex items-center gap-3">
                                                     <img
                                                         src={member?.avatar_url || `https://api.dicebear.com/7.x/notionists/svg?seed=${member?.display_id}`}

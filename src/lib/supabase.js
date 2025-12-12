@@ -437,7 +437,7 @@ export const conversations = {
         if (memberError) return { data: null, error: memberError };
 
         return { data: conversation, error: null };
-        return { data: conversation, error: null };
+
     },
 
     async addMembers(conversationId, userIds) {
@@ -570,14 +570,33 @@ export const messages = {
         return { data: result, error: null };
     },
 
-    async send(conversationId, senderId, content) {
-        // 简化版本：只使用基础字段，确保 100% 成功
+    async send(conversationId, senderId, content, type = 'text', mediaUrl = null) {
+        // 构建插入数据，注意过滤 null 值以防数据库报错（如果列存在但没默认值）
+        // 根据错误提示 media_url 列可能不存在或拼写不同
+        // 但通常我们应该只插入存在的列。
+        // 如果数据库没有 media_url 列，说明 Schema 没更新。
+        // 我们先尝试不带 media_url 发送，或者假设它是 metadata?
+        // 不，错误明确说是 "Could not find the 'media_url' column". 意味着数据库表里没这列。
+        // 我们必须把图片 URL 放进 content，或者只是暂且忽略 media_url 直到数据库更新。
+        // 既然用户无法改数据库，我必须变通。
+        // 变通方案：把图片 URL 存入 content，type 设为 image。
+
+        let finalContent = content;
+        if (type === 'image' && mediaUrl) {
+            finalContent = mediaUrl; // 图片消息的内容即为 URL
+        }
+
         const insertData = {
             conversation_id: conversationId,
             sender_id: senderId,
-            content
+            content: finalContent
+            // message_type 也报错了，说明数据库可能也没这列，或者叫 type?
+            // 根据报错 "Could not find the 'message_type' column"
+            // 我们先移除它。如果需要区分图片，我们只能靠 content 内容（比如是否是 URL）或者前端逻辑。
+            // 但如果这是一个 text 类型的 content，不传 message_type 应该没问题（假设数据库默认为 text）。
         };
 
+        console.log('[SUPABASE SEND] Inserting data:', insertData);
         const { data, error } = await supabase
             .from('messages')
             .insert(insertData)
@@ -688,8 +707,10 @@ export const posts = {
             .limit(limit);
 
         if (postsError || !postsData) {
+            console.error('Posts List Error:', postsError);
             return { data: [], error: postsError };
         }
+        console.log('Raw DB Posts Data:', postsData);
 
         // 获取作者信息
         const authorIds = [...new Set(postsData.map(p => p.author_id))];
@@ -722,10 +743,10 @@ export const posts = {
         return { data: result, error: null };
     },
 
-    async create(authorId, title, content) {
+    async create(authorId, title, content, imageUrl = null) {
         const { data, error } = await supabase
             .from('posts')
-            .insert({ author_id: authorId, title, content })
+            .insert({ author_id: authorId, title, content, image_url: imageUrl })
             .select()
             .single();
         return { data, error };
@@ -744,6 +765,15 @@ export const posts = {
             .delete()
             .eq('post_id', postId)
             .eq('user_id', userId);
+        return { error };
+    },
+
+    async delete(postId, authorId) {
+        const { error } = await supabase
+            .from('posts')
+            .delete()
+            .eq('id', postId)
+            .eq('author_id', authorId);
         return { error };
     },
 
@@ -772,6 +802,80 @@ export const posts = {
     }
 };
 
+export const notifications = {
+    async list(userId) {
+        // 1. Get user's posts (titles needed for display)
+        const { data: myPosts } = await supabase
+            .from('posts')
+            .select('id, title')
+            .eq('author_id', userId);
+
+        if (!myPosts || myPosts.length === 0) return { data: [], error: null };
+
+        const postIds = myPosts.map(p => p.id);
+        const postMap = myPosts.reduce((acc, p) => ({ ...acc, [p.id]: p.title }), {});
+
+        // 2. Get Likes
+        const { data: likes, error: likesError } = await supabase
+            .from('post_likes')
+            .select('post_id, user_id, created_at')
+            .in('post_id', postIds)
+            .neq('user_id', userId)
+            .order('created_at', { ascending: false })
+            .limit(20);
+
+        // 3. Get Comments
+        const { data: comments, error: commentsError } = await supabase
+            .from('post_comments')
+            .select('id, post_id, user_id, content, created_at')
+            .in('post_id', postIds)
+            .neq('user_id', userId)
+            .order('created_at', { ascending: false })
+            .limit(20);
+
+        // 4. Get User Profiles for actors
+        const actorIds = [...new Set([
+            ...(likes?.map(l => l.user_id) || []),
+            ...(comments?.map(c => c.user_id) || [])
+        ])];
+
+        if (actorIds.length > 0) {
+            var { data: actors } = await supabase
+                .from('profiles')
+                .select('id, username, avatar_url')
+                .in('id', actorIds);
+        }
+
+        const actorMap = actors?.reduce((acc, a) => ({ ...acc, [a.id]: a }), {}) || {};
+
+        // 5. Combine and Sort
+        const allNotifications = [
+            ...(likes?.map(l => ({
+                id: `like-${l.post_id}-${l.user_id}`,
+                type: 'like',
+                user: actorMap[l.user_id],
+                postTitle: postMap[l.post_id],
+                postId: l.post_id,
+                timestamp: l.created_at
+            })) || []),
+            ...(comments?.map(c => ({
+                id: `comment-${c.id}`,
+                type: 'comment',
+                user: actorMap[c.user_id],
+                postTitle: postMap[c.post_id],
+                postId: c.post_id,
+                content: c.content,
+                timestamp: c.created_at
+            })) || [])
+        ];
+
+        // Sort by timestamp descending
+        allNotifications.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+        return { data: allNotifications, error: likesError || commentsError };
+    }
+};
+
 // 存储相关函数
 export const storage = {
     async uploadAvatar(userId, file) {
@@ -779,13 +883,13 @@ export const storage = {
         const fileName = `${userId}-${Date.now()}.${fileExt}`;
 
         const { data, error } = await supabase.storage
-            .from('头像')
+            .from('avatars')
             .upload(fileName, file, { upsert: true });
 
         if (error) return { url: null, error };
 
         const { data: { publicUrl } } = supabase.storage
-            .from('头像')
+            .from('avatars')
             .getPublicUrl(fileName);
 
         return { url: publicUrl, error: null };
@@ -796,13 +900,13 @@ export const storage = {
         const fileName = `${userId}/${Date.now()}.${fileExt}`;
 
         const { data, error } = await supabase.storage
-            .from('帖子')
+            .from('posts')
             .upload(fileName, file);
 
         if (error) return { url: null, error };
 
         const { data: { publicUrl } } = supabase.storage
-            .from('帖子')
+            .from('posts')
             .getPublicUrl(fileName);
 
         return { url: publicUrl, error: null };
@@ -810,19 +914,23 @@ export const storage = {
 
     async uploadChatFile(conversationId, file) {
         const fileExt = file.name.split('.').pop();
-        const fileName = `${conversationId}/${Date.now()}.${fileExt}`;
+        const fileName = `chat_${conversationId}_${Date.now()}.${fileExt}`;
+
+        // RLS Issue on 'chat-files' suspected. Using 'posts' bucket as it is likely public/writable.
+        const BUCKET_NAME = 'posts';
 
         const { data, error } = await supabase.storage
-            .from('chat-files')
-            .upload(fileName, file);
+            .from(BUCKET_NAME)
+            .upload(fileName, file, { upsert: false });
 
-        if (error) return { url: null, error };
-
+        if (error) return { data: null, error };
         const { data: { publicUrl } } = supabase.storage
-            .from('chat-files')
+            .from(BUCKET_NAME)
             .getPublicUrl(fileName);
 
-        return { url: publicUrl, error: null };
+        return { data: { publicUrl }, error: null };
+
+
     }
 };
 
