@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Send, Radio, Activity, Globe, Shield, Wifi } from 'lucide-react';
+import { X, Send, Radio, Activity, Globe, Shield, Wifi, TrendingUp, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export default function StarLinkOverlay() {
@@ -8,7 +8,7 @@ export default function StarLinkOverlay() {
     const [wsUrl, setWsUrl] = useState('');
     const [messages, setMessages] = useState([]);
     const [inputText, setInputText] = useState('');
-    const [serverInfo, setServerInfo] = useState(null);
+    const [marketData, setMarketData] = useState([]); // Array of { symbol, price, change }
 
     // WebSocket reference
     const wsRef = useRef(null);
@@ -49,8 +49,29 @@ export default function StarLinkOverlay() {
                 try {
                     const data = JSON.parse(event.data);
 
-                    // Filter system commands if needed
-                    if (data.text && data.text.includes("CMD:")) return;
+                    // 1. Handle Ticker Commands specifically
+                    // Format: "[SYS] SYSTEM: CMD:TICKER:BTC|93260|1,ETH|4823|-1" OR just "CMD:TICKER:..."
+                    const rawText = data.text || '';
+                    if (rawText.includes("CMD:TICKER")) {
+                        // Extract the ticker string part
+                        const parts = rawText.split("CMD:TICKER:");
+                        const tickerPart = parts[1];
+                        if (tickerPart) {
+                            // Parse "BTC|93260|1,ETH|4823|-1"
+                            const items = tickerPart.split(',').map(item => {
+                                const [symbol, price, change] = item.split('|');
+                                return { symbol, price, change: parseInt(change) };
+                            });
+                            setMarketData(items);
+                        }
+                        return; // Do not render this as a chat message
+                    }
+
+                    // 2. Filter other system commands key
+                    if (rawText.includes("CMD:")) return;
+
+                    // 3. Strict Filter: Ignore messages with no content
+                    if (!data.text || data.text.trim() === '') return;
 
                     const newMessage = {
                         id: Date.now() + Math.random(),
@@ -114,6 +135,7 @@ export default function StarLinkOverlay() {
         }
         setConnectionStatus('disconnected');
         setMessages([]);
+        setMarketData([]);
     };
 
     // Cleanup on unmount
@@ -130,7 +152,7 @@ export default function StarLinkOverlay() {
     return (
         <div className={`full-page-overlay ${overlays.starLink ? 'active' : ''} bg-black/90 backdrop-blur-xl z-50`}>
             {/* Header */}
-            <div className="absolute top-0 left-0 right-0 h-16 border-b border-cyan-500/30 flex items-center justify-between px-6 bg-black/40">
+            <div className="absolute top-0 left-0 right-0 h-16 border-b border-cyan-500/30 flex items-center justify-between px-6 bg-black/40 z-20">
                 <div className="flex items-center gap-3">
                     <Globe className={`w-6 h-6 ${connectionStatus === 'connected' ? 'text-cyan-400 animate-pulse' : 'text-gray-500'}`} />
                     <h2 className="text-xl font-bold font-mono text-cyan-400 tracking-widest">STARLINK PROTOCOL</h2>
@@ -143,7 +165,26 @@ export default function StarLinkOverlay() {
                 </button>
             </div>
 
-            <div className="w-full h-full pt-16 flex flex-col items-center justify-center p-4">
+            {/* Ticker Bar (Only visible when connected and has data) */}
+            {connectionStatus === 'connected' && marketData.length > 0 && (
+                <div className="absolute top-16 left-0 right-0 h-8 bg-cyan-950/50 border-b border-cyan-500/20 overflow-hidden flex items-center z-10">
+                    <div className="flex animate-marquee gap-8 px-4 whitespace-nowrap w-full">
+                        {/* Repeat multiple times for smooth loop */}
+                        {[...marketData, ...marketData, ...marketData, ...marketData].map((item, idx) => (
+                            <div key={idx} className="flex items-center gap-2 font-mono text-xs">
+                                <span className="font-bold text-cyan-300">{item.symbol}</span>
+                                <span className="text-white">{item.price}</span>
+                                <span className={`flex items-center ${item.change > 0 ? 'text-green-400' : (item.change < 0 ? 'text-red-400' : 'text-gray-400')}`}>
+                                    {item.change > 0 ? <ArrowUpRight className="w-3 h-3" /> : (item.change < 0 ? <ArrowDownRight className="w-3 h-3" /> : '-')}
+                                    {Math.abs(item.change)}%
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            <div className={`w-full h-full ${marketData.length > 0 ? 'pt-24' : 'pt-16'} flex flex-col items-center justify-center p-4 transition-all duration-300`}>
 
                 {/* Connection Interface */}
                 {connectionStatus === 'disconnected' || connectionStatus === 'error' ? (
