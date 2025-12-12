@@ -1,4 +1,4 @@
-import { MessageSquare, Users, Settings, LogOut } from 'lucide-react';
+import { MessageSquare, Users, Settings, LogOut, Globe } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export default function NavRail() {
@@ -57,6 +57,19 @@ export default function NavRail() {
                         </button>
                     );
                 })}
+            </div>
+
+            {/* 中间功能区 - StarLink */}
+            <div className="w-full px-3 mb-auto">
+                <button
+                    onClick={() => openOverlay('starLink')}
+                    className="w-full aspect-square rounded-xl flex items-center justify-center text-cyan-400 bg-cyan-950/30 hover:bg-cyan-500 hover:text-white transition-all duration-300 relative group border border-cyan-500/20"
+                >
+                    <Globe className="w-6 h-6 animate-pulse-slow" />
+                    <div className="absolute left-full ml-4 px-2 py-1 bg-black/80 text-cyan-400 border border-cyan-500/30 text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap backdrop-blur-sm shadow-[0_0_10px_rgba(6,182,212,0.3)]">
+                        StarLink 传送门
+                    </div>
+                </button>
             </div>
 
             {/* 底部按钮 */}

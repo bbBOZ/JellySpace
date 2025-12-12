@@ -59,7 +59,8 @@ export function AppProvider({ children }) {
 
     const [overlays, setOverlays] = useState({
         profile: false,
-        about: false
+        about: false,
+        starLink: false
     });
 
     const [viewedPost, setViewedPost] = useState(null);

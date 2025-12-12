@@ -8,6 +8,7 @@ import Background from './components/Background';
 import Loader from './components/Loader';
 import ProfileOverlay from './components/ProfileOverlay';
 import AboutOverlay from './components/AboutOverlay';
+import StarLinkOverlay from './components/StarLinkOverlay';
 import {
     AddFriendModal,
     FriendRequestsModal,
@@ -55,6 +56,7 @@ function AppContent() {
             {/* 叠加层 */}
             <ProfileOverlay />
             <AboutOverlay />
+            <StarLinkOverlay />
 
             {/* 模态框 */}
             <AddFriendModal />
