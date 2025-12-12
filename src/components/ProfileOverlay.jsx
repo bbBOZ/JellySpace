@@ -123,22 +123,31 @@ export default function ProfileOverlay() {
         try {
             // 简单的星座计算
             let zodiac = currentUser.zodiac;
-            if (editData.birthday) {
+            if (editData.birthday && editData.birthday !== currentUser.birthday) {
                 const month = parseInt(editData.birthday.split('-')[1]);
                 const day = parseInt(editData.birthday.split('-')[2]);
                 zodiac = getZodiac(month, day);
             }
 
-            const { data, error } = await updateProfile({
-                username: editData.username,
-                avatar_url: editData.avatar_url,
-                signature: editData.signature,
-                gender: editData.gender,
-                birthday: editData.birthday || null,
-                mbti: editData.mbti,
-                zodiac,
-                profile_shader: editData.profileShader
-            });
+            // 构建更新对象，只包含变更的字段
+            const updates = {};
+            if (editData.username !== currentUser.username) updates.username = editData.username;
+            if (editData.avatar_url !== currentUser.avatar_url) updates.avatar_url = editData.avatar_url;
+            if (editData.signature !== currentUser.signature) updates.signature = editData.signature;
+            if (editData.gender !== currentUser.gender) updates.gender = editData.gender;
+            if (editData.birthday !== currentUser.birthday) updates.birthday = editData.birthday || null;
+            if (editData.mbti !== currentUser.mbti) updates.mbti = editData.mbti;
+            if (zodiac !== currentUser.zodiac) updates.zodiac = zodiac;
+            if (editData.profileShader !== currentUser.profile_shader) updates.profile_shader = editData.profileShader;
+
+            if (Object.keys(updates).length === 0) {
+                console.log('No changes detected');
+                setIsEditing(false);
+                setIsLoading(false);
+                return;
+            }
+
+            const { data, error } = await updateProfile(updates);
 
             if (error) {
                 console.error('Save profile error:', error);
