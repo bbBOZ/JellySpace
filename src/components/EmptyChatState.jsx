@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState } from 'react';
 import orbitalShaderSource from '../shaders/OrbitalMegastructure.glsl?raw';
+import SystemStatusPanel from './SystemStatusPanel';
 
 /**
  * 空聊天状态 - 轨道巨型结构 (Orbital Megastructure) Shader
@@ -8,7 +9,6 @@ import orbitalShaderSource from '../shaders/OrbitalMegastructure.glsl?raw';
 export default function EmptyChatState() {
     const canvasRef = useRef(null);
     const containerRef = useRef(null);
-    const [currentTime, setCurrentTime] = useState(new Date());
     const [isReady, setIsReady] = useState(false);
     // 使用视口位置代替鼠标位置，用于键盘控制
     // 初始值经过调整以匹配特定截图视角 (Elevated view)
@@ -18,13 +18,7 @@ export default function EmptyChatState() {
     });
     const keysRef = useRef(new Set());
 
-    // 更新时间
-    useEffect(() => {
-        const timer = setInterval(() => {
-            setCurrentTime(new Date());
-        }, 1000);
-        return () => clearInterval(timer);
-    }, []);
+
 
     // 键盘交互
     useEffect(() => {
@@ -200,12 +194,6 @@ export default function EmptyChatState() {
         };
     }, []);
 
-    const timeString = currentTime.toLocaleTimeString('zh-CN', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit'
-    });
-
     return (
         <div
             ref={containerRef}
@@ -216,27 +204,8 @@ export default function EmptyChatState() {
                 className="absolute inset-0 w-full h-full"
                 style={{ display: 'block' }}
             />
-
-            <div className="relative z-20 text-center pointer-events-none select-none">
-                <h1
-                    className="text-8xl font-bold tracking-wider transition-all duration-300"
-                    style={{
-                        textShadow: '0 0 20px rgba(0, 0, 0, 0.8), 0 0 60px rgba(0, 0, 0, 0.5)',
-                        color: 'rgba(255, 255, 255, 0.95)',
-                        fontFamily: 'monospace' // 配合科幻风格
-                    }}
-                >
-                    {timeString}
-                </h1>
-                <p
-                    className="mt-4 text-xl opacity-70 tracking-[0.5em] transition-all duration-300"
-                    style={{
-                        color: 'rgba(255, 255, 255, 0.8)',
-                    }}
-                >
-                    AWAITING TRANSMISSION
-                </p>
-            </div>
+            {/* 系统状态面板 */}
+            <SystemStatusPanel />
         </div>
     );
 }

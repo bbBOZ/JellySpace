@@ -778,38 +778,55 @@ export const posts = {
     },
 
     async getComments(postId) {
+        // 1. 获取评论数据
         const { data, error } = await supabase
             .from('post_comments')
-            .select(`
-                *,
-                author:profiles(username, avatar_url)
-            `)
+            .select('*')
             .eq('post_id', postId)
             .order('created_at', { ascending: true });
-        return { data, error };
+
+        if (error || !data) return { data: [], error };
+        if (data.length === 0) return { data: [], error: null };
+
+        // 2. 获取评论作者信息 (手动关联以避免 400 错误)
+        const authorIds = [...new Set(data.map(c => c.author_id))];
+        const { data: authors } = await supabase
+            .from('profiles')
+            .select('id, username, avatar_url, display_id')
+            .in('id', authorIds);
+
+        // 3. 组合数据
+        const result = data.map(c => ({
+            ...c,
+            author: authors?.find(a => a.id === c.author_id) || null
+        }));
+
+        return { data: result, error: null };
     },
 
     async addComment(postId, authorId, content) {
+        // 不使用关联查询 result，避免 400 错误
         const { data, error } = await supabase
             .from('post_comments')
             .insert({ post_id: postId, author_id: authorId, content })
-            .select(`
-                *,
-                author:profiles(username, avatar_url)
-            `)
+            .select()
             .single();
+
         return { data, error };
     }
 };
 
 export const notifications = {
     async list(userId) {
+        console.log('[NOTIF] Loading notifications for user:', userId);
+
         // 1. Get user's posts (titles needed for display)
         const { data: myPosts } = await supabase
             .from('posts')
             .select('id, title')
             .eq('author_id', userId);
 
+        console.log('[NOTIF] User posts:', myPosts?.length || 0);
         if (!myPosts || myPosts.length === 0) return { data: [], error: null };
 
         const postIds = myPosts.map(p => p.id);
@@ -824,45 +841,55 @@ export const notifications = {
             .order('created_at', { ascending: false })
             .limit(20);
 
+        console.log('[NOTIF] Likes:', likes?.length || 0);
+
         // 3. Get Comments
         const { data: comments, error: commentsError } = await supabase
             .from('post_comments')
-            .select('id, post_id, user_id, content, created_at')
+            .select('id, post_id, author_id, content, created_at')
             .in('post_id', postIds)
-            .neq('user_id', userId)
+            .neq('author_id', userId)
             .order('created_at', { ascending: false })
             .limit(20);
+
+        console.log('[NOTIF] Comments:', comments?.length || 0);
 
         // 4. Get User Profiles for actors
         const actorIds = [...new Set([
             ...(likes?.map(l => l.user_id) || []),
-            ...(comments?.map(c => c.user_id) || [])
+            ...(comments?.map(c => c.author_id) || [])
         ])];
 
+        console.log('[NOTIF] Unique actors:', actorIds.length);
+
+        let actors = [];
         if (actorIds.length > 0) {
-            var { data: actors } = await supabase
+            const { data: actorsData } = await supabase
                 .from('profiles')
-                .select('id, username, avatar_url')
+                .select('id, username, avatar_url, display_id')
                 .in('id', actorIds);
+            actors = actorsData || [];
         }
 
-        const actorMap = actors?.reduce((acc, a) => ({ ...acc, [a.id]: a }), {}) || {};
+        console.log('[NOTIF] Loaded actor profiles:', actors.length);
+
+        const actorMap = actors.reduce((acc, a) => ({ ...acc, [a.id]: a }), {});
 
         // 5. Combine and Sort
         const allNotifications = [
             ...(likes?.map(l => ({
                 id: `like-${l.post_id}-${l.user_id}`,
                 type: 'like',
-                user: actorMap[l.user_id],
-                postTitle: postMap[l.post_id],
+                user: actorMap[l.user_id] || { id: l.user_id, username: '未知用户', avatar_url: null },
+                postTitle: postMap[l.post_id] || '未知帖子',
                 postId: l.post_id,
                 timestamp: l.created_at
             })) || []),
             ...(comments?.map(c => ({
                 id: `comment-${c.id}`,
                 type: 'comment',
-                user: actorMap[c.user_id],
-                postTitle: postMap[c.post_id],
+                user: actorMap[c.author_id] || { id: c.author_id, username: '未知用户', avatar_url: null },
+                postTitle: postMap[c.post_id] || '未知帖子',
                 postId: c.post_id,
                 content: c.content,
                 timestamp: c.created_at
@@ -872,7 +899,14 @@ export const notifications = {
         // Sort by timestamp descending
         allNotifications.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
+        console.log('[NOTIF] Total notifications:', allNotifications.length);
+        console.log('[NOTIF] Sample notification:', allNotifications[0]);
+
         return { data: allNotifications, error: likesError || commentsError };
+    },
+
+    markAllAsRead(userId) {
+        localStorage.setItem(`last_read_notif_${userId}`, new Date().toISOString());
     }
 };
 

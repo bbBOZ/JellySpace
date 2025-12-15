@@ -1,32 +1,55 @@
 /**
  * Kimi AI 集成模块
  * 用于 Jelly 机器人的智能对话
+ * 支持多人格切换
  */
+
+import { AI_PERSONALITIES } from '../data/constants';
 
 const KIMI_API_KEY = 'sk-uwpPybyHvhO9cP8IvVIJZJ2TRZ2HWWmffl1APIJkEou6A8xn';
 const KIMI_API_URL = 'https://api.moonshot.cn/v1/chat/completions';
 
-// Jelly 机器人的系统提示词
-const JELLY_SYSTEM_PROMPT = `你是果冻（Jelly），一个友好、活泼、有趣的AI助手。你的特点：
-- 说话风格轻松活泼，喜欢用表情符号
-- 对用户友好热情，乐于助人
-- 知识渊博但不炫耀，用简单易懂的方式解释问题
-- 偶尔会开玩笑，但始终保持礼貌
-- 回复简洁有趣，不要太长
+/**
+ * 根据人格ID和响应风格获取AI配置
+ * @param {string} personalityId - 人格ID (default/philosopher/gentle/buddy)
+ * @param {string} responseStyle - 响应风格 (short/medium/long)
+ * @returns {Object} AI配置对象
+ */
+export function getAIConfig(personalityId = 'default', responseStyle = 'medium') {
+    const personality = AI_PERSONALITIES[personalityId] || AI_PERSONALITIES.default;
 
-请记住，你是在一个社交聊天应用中与用户对话。`;
+    // 根据响应风格调整 maxTokens
+    const tokenMultiplier = {
+        short: 0.6,
+        medium: 1,
+        long: 1.5
+    };
+
+    return {
+        systemPrompt: personality.systemPrompt,
+        temperature: personality.temperature,
+        maxTokens: Math.floor(personality.maxTokens * (tokenMultiplier[responseStyle] || 1))
+    };
+}
 
 /**
  * 发送消息给 Kimi AI 并获取回复
  * @param {string} userMessage - 用户消息
  * @param {Array} conversationHistory - 对话历史（可选）
+ * @param {Object} config - AI配置（可选）
  * @returns {Promise<string>} AI 回复
  */
-export async function chat(userMessage, conversationHistory = []) {
+export async function chat(userMessage, conversationHistory = [], config = {}) {
+    const {
+        systemPrompt = AI_PERSONALITIES.default.systemPrompt,
+        temperature = 0.7,
+        maxTokens = 500
+    } = config;
+
     try {
         const messages = [
-            { role: 'system', content: JELLY_SYSTEM_PROMPT },
-            ...conversationHistory.slice(-10).map(msg => ({
+            { role: 'system', content: systemPrompt },
+            ...conversationHistory.slice(-8).map(msg => ({
                 role: msg.isFromJelly ? 'assistant' : 'user',
                 content: msg.text
             })),
@@ -42,8 +65,8 @@ export async function chat(userMessage, conversationHistory = []) {
             body: JSON.stringify({
                 model: 'moonshot-v1-8k',
                 messages,
-                temperature: 0.7,
-                max_tokens: 500
+                temperature,
+                max_tokens: maxTokens
             })
         });
 
@@ -68,4 +91,4 @@ export function isMessageToJelly(chatUserId) {
     return chatUserId === 'jelly' || chatUserId?.toLowerCase() === 'jelly';
 }
 
-export default { chat, isMessageToJelly };
+export default { chat, getAIConfig, isMessageToJelly };

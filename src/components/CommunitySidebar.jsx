@@ -1,21 +1,21 @@
-import { Bell, User, Users, Home, Settings } from 'lucide-react';
+import { Bell, User, Users, Home, Settings, Gamepad2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export default function CommunitySidebar() {
-    const { currentUser, openOverlay, activeTab } = useApp();
+    const { currentUser, openOverlay, activeTab, setActiveTab } = useApp();
 
     const menuItems = [
         {
             icon: Bell,
             label: '通知',
-            onClick: () => openOverlay('notifications'), // We'll assume overlay instead of modal for consistency
+            onClick: () => openOverlay('notifications'),
             active: false
         },
         {
-            icon: Users,
-            label: '好友', // Changed from 关注
-            onClick: () => { }, // Ideally switches tab, but for now just a label change implies logic elsewhere
-            active: false
+            icon: Gamepad2,
+            label: '游戏',
+            onClick: () => setActiveTab('game'),
+            active: activeTab === 'game'
         },
         {
             icon: User,

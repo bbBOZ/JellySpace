@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, MessageCircle } from 'lucide-react';
+import { ArrowLeft, MessageCircle, Heart, Bell } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { notifications } from '../lib/supabase';
 
 export default function NotificationOverlay() {
-    const { overlays, closeOverlay, currentUser, showToast, addComment } = useApp(); // Destructure addComment here
+    const { overlays, closeOverlay, currentUser, showToast, addComment, checkUnreadNotifications } = useApp();
     const [list, setList] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
+    const [activeTab, setActiveTab] = useState('all'); // 'all' | 'likes' | 'comments'
 
     // Reply state
     const [replyingTo, setReplyingTo] = useState(null); // notification object
@@ -15,6 +16,10 @@ export default function NotificationOverlay() {
     useEffect(() => {
         if (overlays.notifications && currentUser) {
             loadNotifications();
+            // Mark all as read when opening
+            notifications.markAllAsRead(currentUser.id);
+            // Update unread count
+            setTimeout(() => checkUnreadNotifications(), 500);
         }
     }, [overlays.notifications, currentUser]);
 
@@ -36,7 +41,7 @@ export default function NotificationOverlay() {
 
         const contentWithMention = `回复 @${replyingTo.user?.username}: ${replyContent}`;
 
-        const { error } = await addComment(replyingTo.postId, currentUser.id, contentWithMention);
+        const { error } = await addComment(replyingTo.postId, contentWithMention);
 
         if (error) {
             showToast.error('回复失败');
@@ -49,28 +54,72 @@ export default function NotificationOverlay() {
 
     if (!overlays.notifications) return null;
 
+    // Filter notifications based on active tab
+    const filteredList = activeTab === 'all'
+        ? list
+        : list.filter(item => item.type === activeTab.replace('s', '')); // 'likes' -> 'like', 'comments' -> 'comment'
+
     return (
         <div className={`full-page-overlay ${overlays.notifications ? 'active' : ''} bg-black/95 text-white overflow-y-auto`}>
             <div className="max-w-2xl mx-auto min-h-screen relative p-6">
                 {/* Header */}
-                <div className="flex items-center gap-4 mb-8 sticky top-0 bg-black/95 z-10 py-4 border-b border-white/10">
-                    <button
-                        onClick={() => closeOverlay('notifications')}
-                        className="p-2 hover:bg-white/10 rounded-full transition-colors"
-                    >
-                        <ArrowLeft className="w-6 h-6" />
-                    </button>
-                    <h2 className="text-2xl font-bold">通知</h2>
+                <div className="sticky top-0 bg-black/95 z-10 pb-4 border-b border-white/10">
+                    <div className="flex items-center gap-4 mb-4">
+                        <button
+                            onClick={() => closeOverlay('notifications')}
+                            className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                        >
+                            <ArrowLeft className="w-6 h-6" />
+                        </button>
+                        <h2 className="text-2xl font-bold">通知</h2>
+                    </div>
+
+                    {/* Tabs */}
+                    <div className="flex gap-2">
+                        {[
+                            { id: 'all', label: '全部', icon: Bell },
+                            { id: 'likes', label: '点赞', icon: Heart },
+                            { id: 'comments', label: '评论', icon: MessageCircle }
+                        ].map(tab => {
+                            const Icon = tab.icon;
+                            const isActive = activeTab === tab.id;
+                            const count = tab.id === 'all'
+                                ? list.length
+                                : list.filter(i => i.type === tab.id.replace('s', '')).length;
+
+                            return (
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setActiveTab(tab.id)}
+                                    className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${isActive
+                                            ? 'bg-cyan-500 text-white shadow-lg shadow-cyan-500/30'
+                                            : 'bg-white/5 text-gray-400 hover:bg-white/10'
+                                        }`}
+                                >
+                                    <Icon className="w-4 h-4" />
+                                    {tab.label}
+                                    {count > 0 && (
+                                        <span className={`text-xs px-1.5 py-0.5 rounded-full ${isActive ? 'bg-white/20' : 'bg-cyan-500/20 text-cyan-400'
+                                            }`}>
+                                            {count}
+                                        </span>
+                                    )}
+                                </button>
+                            );
+                        })}
+                    </div>
                 </div>
 
                 {/* List */}
-                <div className="space-y-4">
+                <div className="space-y-4 mt-6">
                     {isLoading ? (
                         <div className="text-center py-10 opacity-50">加载中...</div>
-                    ) : list.length === 0 ? (
-                        <div className="text-center py-20 text-gray-500">暂无新通知</div>
+                    ) : filteredList.length === 0 ? (
+                        <div className="text-center py-20 text-gray-500">
+                            {activeTab === 'all' ? '暂无新通知' : `暂无${activeTab === 'likes' ? '点赞' : '评论'}`}
+                        </div>
                     ) : (
-                        list.map(item => (
+                        filteredList.map(item => (
                             <div key={item.id} className="bg-white/5 rounded-xl p-4 border border-white/5 hover:border-white/10 transition-colors">
                                 <div className="flex gap-4">
                                     <img

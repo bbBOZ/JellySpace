@@ -1,0 +1,6 @@
+@import url('https://fonts.googleapis.com/css2?family=VT323&display=swap');
+
+/* 如果 Google Fonts 加载失败的 fallback 样式 */
+.font-pixel {
+    font-family: 'VT323', 'Courier New', monospace;
+}

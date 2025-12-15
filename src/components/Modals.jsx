@@ -803,6 +803,8 @@ export function SettingsModal() {
 export function PostDetailModal() {
     const { modals, closeModal, viewedPost, likePost, addComment, currentUser, getUserById } = useApp();
     const [commentContent, setCommentContent] = useState('');
+    const [replyingTo, setReplyingTo] = useState(null); // { commentId, username }
+    const [highlightedCommentId, setHighlightedCommentId] = useState(null);
 
     if (!modals.postDetail || !viewedPost) return null;
 
@@ -815,6 +817,69 @@ export function PostDetailModal() {
         if (!commentContent.trim()) return;
         addComment(viewedPost.id, commentContent);
         setCommentContent('');
+        setReplyingTo(null);
+    };
+
+    const handleReplyClick = (comment, commentAuthor) => {
+        setReplyingTo({
+            commentId: comment.id,
+            username: commentAuthor?.username || '未知用户'
+        });
+        setCommentContent(`@${commentAuthor?.username || '未知用户'} `);
+        // Focus on input
+        setTimeout(() => {
+            const input = document.querySelector('.comment-input');
+            if (input) input.focus();
+        }, 100);
+    };
+
+    const cancelReply = () => {
+        setReplyingTo(null);
+        setCommentContent('');
+    };
+
+    // 解析评论中的@提及
+    const parseComment = (content) => {
+        const parts = [];
+        const mentionRegex = /@(\S+)/g;
+        let lastIndex = 0;
+        let match;
+
+        while ((match = mentionRegex.exec(content)) !== null) {
+            // 添加@之前的文本
+            if (match.index > lastIndex) {
+                parts.push({
+                    type: 'text',
+                    content: content.slice(lastIndex, match.index)
+                });
+            }
+            // 添加@提及
+            parts.push({
+                type: 'mention',
+                content: match[0],
+                username: match[1]
+            });
+            lastIndex = match.index + match[0].length;
+        }
+
+        // 添加剩余文本
+        if (lastIndex < content.length) {
+            parts.push({
+                type: 'text',
+                content: content.slice(lastIndex)
+            });
+        }
+
+        return parts.length > 0 ? parts : [{ type: 'text', content }];
+    };
+
+    const scrollToComment = (commentId) => {
+        const element = document.getElementById(`comment-${commentId}`);
+        if (element) {
+            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            setHighlightedCommentId(commentId);
+            setTimeout(() => setHighlightedCommentId(null), 2000);
+        }
     };
 
     return (
@@ -892,8 +957,16 @@ export function PostDetailModal() {
                         {viewedPost.commentsList && viewedPost.commentsList.length > 0 ? (
                             viewedPost.commentsList.map(comment => {
                                 const commentAuthor = getUserById(comment.authorId);
+                                const parsedContent = parseComment(comment.content);
+                                const isHighlighted = highlightedCommentId === comment.id;
+
                                 return (
-                                    <div key={comment.id} className="flex gap-3">
+                                    <div
+                                        key={comment.id}
+                                        id={`comment-${comment.id}`}
+                                        className={`flex gap-3 p-3 rounded-lg transition-colors ${isHighlighted ? 'bg-cyan-500/20 border border-cyan-500/50' : ''
+                                            }`}
+                                    >
                                         <img src={commentAuthor?.avatar_url || `https://api.dicebear.com/7.x/notionists/svg?seed=${commentAuthor?.display_id}`} className="w-8 h-8 rounded-full" alt={commentAuthor?.username} />
                                         <div className="flex-1">
                                             <div className="bg-white/5 rounded-xl p-3">
@@ -901,8 +974,39 @@ export function PostDetailModal() {
                                                     <span className="font-bold text-sm">{commentAuthor?.username}</span>
                                                     <span className="text-xs theme-text-secondary">{comment.date}</span>
                                                 </div>
-                                                <p className="text-sm theme-text-secondary">{comment.content}</p>
+                                                <p className="text-sm theme-text-secondary">
+                                                    {parsedContent.map((part, idx) => {
+                                                        if (part.type === 'mention') {
+                                                            return (
+                                                                <span
+                                                                    key={idx}
+                                                                    className="text-cyan-400 font-medium cursor-pointer hover:underline"
+                                                                    onClick={() => {
+                                                                        // 尝试找到被提及用户的评论
+                                                                        const mentionedComment = viewedPost.commentsList.find(c => {
+                                                                            const author = getUserById(c.authorId);
+                                                                            return author?.username === part.username;
+                                                                        });
+                                                                        if (mentionedComment) {
+                                                                            scrollToComment(mentionedComment.id);
+                                                                        }
+                                                                    }}
+                                                                >
+                                                                    {part.content}
+                                                                </span>
+                                                            );
+                                                        }
+                                                        return <span key={idx}>{part.content}</span>;
+                                                    })}
+                                                </p>
                                             </div>
+                                            <button
+                                                onClick={() => handleReplyClick(comment, commentAuthor)}
+                                                className="mt-2 text-xs text-cyan-500 hover:text-cyan-400 font-medium flex items-center gap-1"
+                                            >
+                                                <MessageCircle className="w-3 h-3" />
+                                                回复
+                                            </button>
                                         </div>
                                     </div>
                                 );
@@ -917,14 +1021,25 @@ export function PostDetailModal() {
 
                 {/* Comment Input */}
                 <div className="p-4 border-t theme-border shrink-0 bg-black/20 backdrop-blur-md">
+                    {replyingTo && (
+                        <div className="mb-2 flex items-center justify-between text-xs theme-text-secondary bg-cyan-500/10 px-3 py-2 rounded-lg">
+                            <span>回复 <span className="text-cyan-400 font-medium">@{replyingTo.username}</span></span>
+                            <button
+                                onClick={cancelReply}
+                                className="text-red-400 hover:text-red-300 font-medium"
+                            >
+                                取消
+                            </button>
+                        </div>
+                    )}
                     <div className="flex gap-2">
                         <input
                             type="text"
                             value={commentContent}
                             onChange={(e) => setCommentContent(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && handleSendComment()}
-                            placeholder="写下你的评论..."
-                            className="flex-1 glass-input rounded-xl px-4 py-2 outline-none focus:border-cyan-500 transition-colors"
+                            placeholder={replyingTo ? `回复 @${replyingTo.username}...` : "写下你的评论..."}
+                            className="comment-input flex-1 glass-input rounded-xl px-4 py-2 outline-none focus:border-cyan-500 transition-colors"
                         />
                         <button
                             onClick={handleSendComment}

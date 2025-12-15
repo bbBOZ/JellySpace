@@ -4,12 +4,12 @@ import NavRail from './components/NavRail';
 import Sidebar from './components/Sidebar';
 import ChatView from './components/ChatView';
 import CommunityView from './components/CommunityView';
+import PokerGame from './components/PokerGame';
 import Background from './components/Background';
 import Loader from './components/Loader';
 import ProfileOverlay from './components/ProfileOverlay';
 import NotificationOverlay from './components/NotificationOverlay';
 import AboutOverlay from './components/AboutOverlay';
-import StarLinkOverlay from './components/StarLinkOverlay';
 import {
     AddFriendModal,
     FriendRequestsModal,
@@ -51,6 +51,9 @@ function AppContent() {
 
                         {/* 社区视图 */}
                         {activeTab === 'community' && <CommunityView />}
+
+                        {/* 游戏视图 */}
+                        {activeTab === 'game' && <PokerGame />}
                     </div>
                 </div>
             )}
@@ -59,7 +62,7 @@ function AppContent() {
             <ProfileOverlay />
             <NotificationOverlay />
             <AboutOverlay />
-            <StarLinkOverlay />
+            <AboutOverlay />
 
             {/* 模态框 */}
             <AddFriendModal />

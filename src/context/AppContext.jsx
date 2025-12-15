@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef, us
 import { useToast } from '../components/Toast';
 import { supabase, auth, profiles, settings, friendships, conversations, messages, posts as postsAPI, storage } from '../lib/supabase';
 import { cache, CACHE_KEYS, isOnline, onNetworkChange } from '../lib/cache';
-import { chat as aiChat } from '../lib/ai';
+import { chat as aiChat, getAIConfig } from '../lib/ai';
 import { compressImage } from '../lib/imageUtils';
 
 const AppContext = createContext(null);
@@ -25,6 +25,10 @@ export function AppProvider({ children }) {
     const [bgStyle, setBgStyle] = useState('static');
     const [bubbleStyle, setBubbleStyle] = useState('default');
     const [fontStyle, setFontStyle] = useState('系统默认');
+
+    // AI 设置
+    const [aiPersonality, setAiPersonality] = useState('default');
+    const [aiResponseStyle, setAiResponseStyle] = useState('medium');
 
     // 网络状态
     const [isOffline, setIsOffline] = useState(!isOnline());
@@ -276,6 +280,8 @@ export function AppProvider({ children }) {
             setBgStyle(cachedSettings.bg_style || 'static');
             setBubbleStyle(cachedSettings.bubble_style || 'default');
             setFontStyle(cachedSettings.font_style || '系统默认');
+            setAiPersonality(cachedSettings.ai_personality || 'default');
+            setAiResponseStyle(cachedSettings.ai_response_style || 'medium');
         }
 
         // 加载好友列表缓存
@@ -339,6 +345,8 @@ export function AppProvider({ children }) {
                         setBgStyle(userSettings.bg_style || 'static');
                         setBubbleStyle(userSettings.bubble_style || 'default');
                         setFontStyle(userSettings.font_style || '系统默认');
+                        setAiPersonality(userSettings.ai_personality || 'default');
+                        setAiResponseStyle(userSettings.ai_response_style || 'medium');
                         cache.set(CACHE_KEYS.USER_SETTINGS, userSettings, userId);
                     }
                 })(),
@@ -863,24 +871,22 @@ export function AppProvider({ children }) {
         try {
             jellyReplyLockRef.current.add(chatId);
             const history = messagesList[chatId] || [];
-            const historyForAI = history.slice(-10).map(msg => ({
+            const historyForAI = history.slice(-8).map(msg => ({
                 text: msg.text,
                 isFromJelly: msg.senderId !== currentUser?.id
             }));
 
-            const aiReply = await aiChat(userMessage, historyForAI);
+            // 获取 AI 配置（根据当前人格和响应风格）
+            const config = getAIConfig(aiPersonality, aiResponseStyle);
+
+            // 调用 AI 并传入配置
+            const aiReply = await aiChat(userMessage, historyForAI, config);
             const { data: jellyProfile } = await profiles.getByDisplayId('jelly');
             if (!jellyProfile) return;
 
             const { data: replyData } = await messages.send(chatId, jellyProfile.id, aiReply);
 
             if (replyData) {
-                // 注意：这里我们不需要手动更新 messagesList，因为我们相信 Realtime 订阅会推送这个新消息
-                // 但是为了即时响应性，且 AI 回复不像对端用户可能离线，这里也可以乐观更新。
-                // 不过既然做了架构优化，我们这里只让后端插入，前端坐等 Realtime 回调！
-                // ... 实际上，为了保险（万一 Realtime 还是挂了），还是手动插一下比较好，
-                // 记得我们在 subscribeToAll 里做了去重吗？所以这里手动插也是安全的。
-
                 const jellyMessage = {
                     id: replyData.id,
                     senderId: replyData.sender_id,
@@ -1025,6 +1031,7 @@ export function AppProvider({ children }) {
                 }));
             }
         }
+        return { data, error };
     };
 
     const deletePost = async (postId) => {
@@ -1046,6 +1053,8 @@ export function AppProvider({ children }) {
         if (newSettings.bgStyle !== undefined) updates.bg_style = newSettings.bgStyle;
         if (newSettings.bubbleStyle !== undefined) updates.bubble_style = newSettings.bubbleStyle;
         if (newSettings.fontStyle !== undefined) updates.font_style = newSettings.fontStyle;
+        if (newSettings.aiPersonality !== undefined) updates.ai_personality = newSettings.aiPersonality;
+        if (newSettings.aiResponseStyle !== undefined) updates.ai_response_style = newSettings.aiResponseStyle;
         await settings.update(currentUser.id, updates);
         const cachedSettings = cache.getData(CACHE_KEYS.USER_SETTINGS, currentUser.id) || {};
         cache.set(CACHE_KEYS.USER_SETTINGS, { ...cachedSettings, ...updates }, currentUser.id);
@@ -1273,6 +1282,35 @@ export function AppProvider({ children }) {
             }));
     }, [chats]);
 
+    // 通知相关状态和函数
+    const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
+
+    const checkUnreadNotifications = useCallback(async () => {
+        if (!currentUser) return;
+
+        try {
+            const { notifications } = await import('../lib/supabase');
+            const lastReadTime = localStorage.getItem(`last_read_notif_${currentUser.id}`) || '0';
+            const { data } = await notifications.list(currentUser.id);
+
+            if (data) {
+                const unread = data.filter(n => new Date(n.timestamp).getTime() > new Date(lastReadTime).getTime());
+                setUnreadNotificationsCount(unread.length);
+            }
+        } catch (e) {
+            console.error('Failed to check unread notifs:', e);
+        }
+    }, [currentUser]);
+
+    // Periodically check notifications (every 30s)
+    useEffect(() => {
+        if (currentUser) {
+            checkUnreadNotifications();
+            const interval = setInterval(checkUnreadNotifications, 30000);
+            return () => clearInterval(interval);
+        }
+    }, [currentUser, checkUnreadNotifications]);
+
     const value = {
         currentUser: userProfile || currentUser,
         isAuthenticated,
@@ -1285,6 +1323,9 @@ export function AppProvider({ children }) {
         bgStyle, setBgStyle,
         bubbleStyle, setBubbleStyle,
         fontStyle, setFontStyle,
+        aiPersonality, setAiPersonality,
+        aiResponseStyle, setAiResponseStyle,
+        saveSettings,
         toggleSidebar, isSidebarCollapsed,
         chats, messages: messagesList, posts, friends, groupChats,
         sendMessage, createPost, likePost, addComment, deletePost, searchUser,
@@ -1296,6 +1337,7 @@ export function AppProvider({ children }) {
         viewedPost, setViewedPost, openPostDetail,
         viewedProfile, setViewedProfile,
         isSidebarCollapsed, toggleSidebar,
+        checkUnreadNotifications, unreadNotificationsCount,
         realtimeStatus, // 暴露连接状态
         showToast,
         sendImageMessage

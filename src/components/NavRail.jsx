@@ -1,4 +1,4 @@
-import { MessageSquare, Users, Settings, LogOut, Globe } from 'lucide-react';
+import { MessageSquare, Users, Settings, LogOut, Globe, Bell } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export default function NavRail() {
@@ -12,7 +12,8 @@ export default function NavRail() {
         setViewedProfile,
         theme,
         toggleSidebar,
-        isSidebarCollapsed
+        isSidebarCollapsed,
+        unreadNotificationsCount
     } = useApp();
 
     const navItems = [
@@ -68,20 +69,26 @@ export default function NavRail() {
                         </button>
                     );
                 })}
-            </div>
 
-            {/* 中间功能区 - StarLink */}
-            <div className="w-full px-3 mb-auto">
+                {/* 通知按钮 */}
                 <button
-                    onClick={() => openOverlay('starLink')}
-                    className="w-full aspect-square rounded-xl flex items-center justify-center text-cyan-400 bg-cyan-950/30 hover:bg-cyan-500 hover:text-white transition-all duration-300 relative group border border-cyan-500/20"
+                    onClick={() => {
+                        openOverlay('notifications');
+                        // Optional: mark as read immediately or wait for overlay logic
+                    }}
+                    className="w-full aspect-square rounded-xl flex items-center justify-center theme-text-secondary hover:bg-white/10 hover:theme-text-primary transition-all duration-300 relative group"
                 >
-                    <Globe className="w-6 h-6 animate-pulse-slow" />
-                    <div className="absolute left-full ml-4 px-2 py-1 bg-black/80 text-cyan-400 border border-cyan-500/30 text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap backdrop-blur-sm shadow-[0_0_10px_rgba(6,182,212,0.3)]">
-                        StarLink 传送门
+                    <Bell className="w-6 h-6" />
+                    {unreadNotificationsCount > 0 && (
+                        <div className="absolute top-3 right-3 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-[#0f172a] animate-pulse"></div>
+                    )}
+                    <div className="absolute left-full ml-4 px-2 py-1 bg-black/80 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap backdrop-blur-sm">
+                        通知
                     </div>
                 </button>
             </div>
+
+
 
             {/* 底部按钮 */}
             <div className="flex flex-col gap-4 w-full px-3 pb-4">
